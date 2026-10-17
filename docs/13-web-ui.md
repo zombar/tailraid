@@ -223,6 +223,14 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 - **ETag** is `"<ino>.<gen>.<version>"` and is sent only while the file is clean. `Version`
   bumps on commit, not on a WAL write, so a dirty file sends no validator and a zero modtime;
   a conditional GET can therefore never 304 stale bytes.
+- **Dropping a folder** onto a listing uploads every file in it, keeping its tree below
+  the folder dropped on (I-404): the page walks the drop's entries (`webkitGetAsEntry`,
+  read before the handler returns) and queues each file for its own directory, which the
+  PUT makes as it creates the temp; the desktop's bookkeeping (`.DS_Store`, `._*`,
+  `Thumbs.db`, `desktop.ini`) is left out and an empty folder makes nothing. The queue
+  shows each file by its path below the drop and sends them one after another. Until
+  2026-10-17 the page took `dataTransfer.files`, where a folder is one unreadable entry
+  (with a non-zero size on macOS), so a dropped folder failed as "network error".
 - **Uploads** are atomic and resumable, and the vfs is their only state. The body streams
   through `OpenFile(O_WRONLY|O_CREATE)`, `Seek` and `Write` on a hidden sibling
   `.<name>.<node>.tailraid-upload` in the target's directory (the gateway's node ID in
@@ -1023,6 +1031,9 @@ placement gives way to legible text: the dashed line keeps the event's true time
   identical bytes through the vfs at once; a new file is 201, an overwrite 204 and truncates
   first; a PUT or `POST /api/mkdir` on a stale gateway is 503 and changes nothing; a WAL or
   dirty-byte cap waits for the flusher instead of failing.
+- **I-404** — A folder dropped onto a listing uploads each file it holds, at any depth, to
+  its path below the folder dropped on, making the folders on the way; the desktop's
+  bookkeeping files are not uploaded.
 - **I-226** — Uploads of one name through two gateways never mix: each gateway writes its
   own temp (`.<name>.<node>.tailraid-upload`), one gateway refuses a second concurrent
   upload of a name with 409, and the publish is one `Rename`, so the name ends up holding
@@ -1221,6 +1232,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
 | I-68 | `TestWebUI_Authorize_MemberOrSameUser`, `TestWebUI_Authorize_BeforeBody`, `TestWhoIs_User_CachesLogin`, `TestWhoIs_Login_TaggedHasNone` |
 | I-69 | `TestWebUI_Get_RangeBoundaries`, `TestWebUI_Get_ETagAndHead`, `TestWebUI_Get_DirtyOverlayReadYourWrites`, `TestWebUI_Get_ContentTypes`, `TestVFS_StatReportsDirty` |
 | I-70 | `TestWebUI_Put_NewAndOverwrite`, `TestWebUI_Put_SizeBoundaries`, `TestWebUI_Put_WaitsForWALCap`, `TestWebUI_Mkdir`, `TestWebUI_Mutations_StaleIs503`, `TestVFS_CapErrorsKeepSentinels` |
+| I-404 | `TestWebUI_Put_MakesParents` |
 | I-71 | `TestWebUI_CSRFHeaderRequired`, `TestWebUI_Get_ContentTypes` |
 | I-72 | `TestWebUI_Paths` |
 | I-73 | `TestWebUI_New_RequiresAuthorizer`, `TestWebUI_StatusCached`, `TestWebUI_StaticAssets`, `TestConfig_ListenWeb` |

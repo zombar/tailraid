@@ -305,3 +305,29 @@ func TestWebUI_Chunks(t *testing.T) {
 		t.Fatalf("missing: %d", code)
 	}
 }
+
+// A PUT below folders that do not exist yet makes them, as a dropped folder's files need
+// (docs/13 §4): each file lands at its path with its bytes, the folders are directories,
+// and a second file in the same new folder finds it made.
+// Invariant: I-404
+func TestWebUI_Put_MakesParents(t *testing.T) {
+	u := newUI(t)
+	first := testharness.Pattern(5000, 3)
+	if code, _ := u.put("/Better Call Saul/Season 1/S01E01.mkv", first); code != 201 {
+		t.Fatalf("first file: %d", code)
+	}
+	if code, _ := u.put("/Better Call Saul/Season 1/S01E02.mkv", []byte("two")); code != 201 {
+		t.Fatalf("second file: %d", code)
+	}
+	if code, _ := u.put("/Better Call Saul/poster.jpg", []byte("jpg")); code != 201 {
+		t.Fatalf("a file one level up: %d", code)
+	}
+	for _, d := range []string{"/Better Call Saul", "/Better Call Saul/Season 1"} {
+		if st := u.statOf(d); st.Type != "dir" {
+			t.Fatalf("%s: %+v, want a directory", d, st)
+		}
+	}
+	if got := u.readAt("/Better Call Saul/Season 1/S01E01.mkv", 0, 6000); !bytes.Equal(got, first) {
+		t.Fatalf("first file's bytes differ at %d", testharness.FirstDiff(got, first))
+	}
+}

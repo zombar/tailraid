@@ -3237,9 +3237,35 @@ var running = false;
 var onQueueChange = null;
 var onJobDone = null;
 function enqueue(dir, files) {
-  for (const f of Array.from(files)) queue.push({ dir, file: f, sent: 0, state: "queued" });
+  enqueueAt(Array.from(files).map((file) => ({ dir, file })));
+}
+function enqueueAt(list) {
+  for (const { dir, file, label } of list) queue.push({ dir, file, label, sent: 0, state: "queued" });
   onQueueChange?.();
   void runQueue();
+}
+function skipped(name) {
+  return name === ".DS_Store" || name.startsWith("._") || name === "Thumbs.db" || name === "desktop.ini";
+}
+async function dropped(entries, dir) {
+  const out = [];
+  const walk = async (e, rel) => {
+    if (e.isFile) {
+      const file = await new Promise((ok, fail) => e.file(ok, fail));
+      if (!skipped(file.name)) out.push({ dir: rel ? join(dir, rel) : dir, file, label: rel ? join(rel, file.name) : file.name });
+      return;
+    }
+    if (!e.isDirectory) return;
+    const reader = e.createReader();
+    const sub = rel ? join(rel, e.name) : e.name;
+    for (; ; ) {
+      const batch = await new Promise((ok, fail) => reader.readEntries(ok, fail));
+      if (!batch.length) break;
+      for (const k of batch) await walk(k, sub);
+    }
+  };
+  for (const e of entries) await walk(e, "");
+  return out;
 }
 async function runQueue() {
   if (running) return;
@@ -3698,7 +3724,7 @@ function render8(root, ctx) {
     } }, "cancel"));
     else if (j.state === "failed") state.append("failed: " + (j.message ?? ""));
     else state.append(j.state);
-    const el = h("div", { class: "upload" }, h("span", { class: "name" }, j.file.name), state);
+    const el = h("div", { class: "upload" }, h("span", { class: "name" }, j.label ?? j.file.name), state);
     if (j.state === "uploading") {
       const b = h("div", { class: "bar" });
       const fill = h("i");
@@ -3718,10 +3744,15 @@ function render8(root, ctx) {
     if (inTrash || asOf) return;
     ev.preventDefault();
     onDragLeave();
-    const files = Array.from(ev.dataTransfer?.files ?? []);
-    const plain = files.filter((f) => f.type !== "" || f.size > 0);
-    if (plain.length < files.length) toast("Folders are not supported; use New folder", "bad");
-    if (plain.length) enqueue(dir, plain);
+    const entries2 = Array.from(ev.dataTransfer?.items ?? []).filter((i) => i.kind === "file").map((i) => i.webkitGetAsEntry()).filter((e) => e !== null);
+    if (!entries2.length) {
+      enqueue(dir, Array.from(ev.dataTransfer?.files ?? []));
+      return;
+    }
+    void dropped(entries2, dir).then(
+      (list) => list.length ? enqueueAt(list) : toast("Nothing to upload in what was dropped", "bad"),
+      (e) => toast("drop: " + (e instanceof Error ? e.message : String(e)), "bad")
+    );
   };
   root.addEventListener("dragover", onDragOver);
   root.addEventListener("dragleave", onDragLeave);
