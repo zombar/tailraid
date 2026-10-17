@@ -198,7 +198,7 @@ func (j *Jobs) setLocked(job *restoreJob, state, why string) {
 }
 
 // pruneLocked drops the finished jobs older than restoreKeep, and the oldest finished
-// beyond restoreKeepMax.
+// beyond restoreKeepMax (I-390).
 func (j *Jobs) pruneLocked(now time.Time) {
 	finished := 0
 	for _, job := range j.jobs {
@@ -228,8 +228,13 @@ func (j *Jobs) List() []rpc.RestoreJob {
 	j.load()
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	out := make([]rpc.RestoreJob, 0, len(j.jobs))
 	now := j.clk.Now()
+	n := len(j.jobs)
+	j.pruneLocked(now) // a finished job ages out on a quiet host too, not only at the next change (I-390)
+	if len(j.jobs) < n {
+		j.saveLocked()
+	}
+	out := make([]rpc.RestoreJob, 0, len(j.jobs))
 	for _, job := range j.jobs {
 		r := job.RestoreJob
 		if job.Actor != 0 {

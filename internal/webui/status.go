@@ -11,11 +11,16 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/rpc"
 )
 
 // statusTTL bounds how often the admin report (a walk of every chunk) is rebuilt; every
 // tab polling at 5 s shares one build (docs/13 §7, I-73).
 const statusTTL = 2 * time.Second
+
+// RestoreShown is how long the dashboard shows a done or cancelled restore job after it
+// ends; a failed one stays while its host lists it (docs/16 §6, I-390).
+const RestoreShown = time.Hour
 
 type statusCache struct {
 	mu   sync.Mutex
@@ -37,6 +42,7 @@ func (s *Server) report() any {
 		rep := s.o.Status()
 		if r, ok := rep.(admin.Report); ok { // the join token is for the CLI on a member, never for a browser (I-127)
 			r.JoinToken = ""
+			r.Restores = shownRestores(r.Restores, now)
 			rep = r
 		}
 		b, err := json.Marshal(rep)
@@ -98,4 +104,18 @@ func (s *Server) chunks(w http.ResponseWriter, r *http.Request) {
 		reps[i].Events = nil // the event ring is the CLI's; the browser shows placement
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "chunks": reps})
+}
+
+// shownRestores is the jobs the dashboard draws: every unfinished or failed one, and a
+// done or cancelled one within RestoreShown of its end (I-390). jobs is not changed.
+func shownRestores(jobs []rpc.RestoreJob, now time.Time) []rpc.RestoreJob {
+	var out []rpc.RestoreJob
+	for i := range jobs {
+		j := &jobs[i]
+		if (j.State == rpc.RestoreDone || j.State == rpc.RestoreCancelled) && now.Sub(time.Unix(0, j.Ended)) > RestoreShown {
+			continue
+		}
+		out = append(out, *j)
+	}
+	return out
 }

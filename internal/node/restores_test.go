@@ -521,3 +521,22 @@ func TestRestoreJob_YieldingInStatus(t *testing.T) {
 	}
 	r.matches("/out")
 }
+
+// A finished job past the 7 days leaves the host's list when the list is read, whether
+// or not another job changed state since; so does one read back from the file after a
+// restart (I-390).
+// Invariant: I-390
+func TestRestoreJob_FinishedPrunedWhenListed(t *testing.T) {
+	r := newJobRig(t)
+	id := r.start(0, "/back")
+	r.await(id, rpc.RestoreDone)
+	r.f.Clk.Advance(6 * 24 * time.Hour)
+	if r.job(id).ID == "" {
+		t.Fatal("a job done 6 days ago is no longer listed")
+	}
+	r.restart() // what the host reads back from its file is pruned the same way
+	r.f.Clk.Advance(24*time.Hour + time.Minute)
+	if got := r.jobs.List(); len(got) != 0 {
+		t.Fatalf("a job done over 7 days ago is still listed: %+v", got)
+	}
+}
