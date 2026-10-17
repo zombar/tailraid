@@ -296,6 +296,12 @@ it does not reach. §11 maps each control to its mechanism here.
   the session's user may see and changes what they may change, and no page manages
   users, groups or grants (docs/13 §9). The lookdev is `assets/lookdev/signin.html` and
   the chip in `components.html` and `dashboard.html`.
+- **Playback rows** (docs/13 §10c, docs/02 op 34) are the session's user's (`u:<idx>`)
+  once the cluster has users and the Tailscale login's (`t:<login>`) before: rows kept
+  under a login stay theirs and are not moved to the user the login later signs in as.
+  A playback command is the viewer's own state, not a change to the volume: it carries
+  `System` (no grant is checked in the FSM, the node checked Read on the file before it
+  proposed, I-407) and is not audited.
 - **Phishing resistance** (NIST SP 800-63B §3.2.5) is not claimed: the code travels in a
   URL the person pastes; the tailnet is the transport boundary.
 

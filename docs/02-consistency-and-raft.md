@@ -74,6 +74,8 @@ const (
     OpSnapshotEnd             // {ID, OK bool, Root Hash, Files, Bytes, NewBytes uint64, Missing uint32, Now} (codec 7)
     OpSnapshotDelete          // {ID, Done bool, Now}: the mirror host's thinning only, never a user (codec 7)
     OpSnapshotImport          // {Mirror, After SnapID, Name, At, Auto, Root, Files, Bytes, NewBytes, Missing, Now} → Result.SnapID (16 §5, codec 7)
+    // … ops 23–25 secrets (codec 11), 28–32 users (codec 14), 33 SnapshotHeal (codec 15)
+    OpPlayback Op = 34        // {Viewer, Action, Inos []Ino, Pos, Dur uint64 (ms), On, Now}: a viewer's playback rows (13 §10c, codec 17)
 )
 const AttrFlags uint8 = 1 << 5  // SetAttr.Mask bit: {Flags uint8} follows Now (codec 4)
 const FlagProtected, FlagNSFW uint8 = 1, 2
@@ -362,6 +364,28 @@ syncing, deleting or removed one), and `Missing` at most the row's (`ErrBadComma
 otherwise: the count only falls). Sets the row's `Missing`, and `State: Complete` when it
 is zero; nothing else changes, and no hold begins or ends.
 
+**Playback** (13 §10c, codec 17). One viewer's rows, `State.Playback[Viewer][Ino]` =
+`{Pos, Dur, Watched, Plays, Hidden, At, On}`. `Viewer` is 3 to `ViewerMax` (128) bytes,
+`u:<idx>` or `t:<login>` (`ErrBadCommand` otherwise); every `Ino` must be a live `TFile`
+(`ErrNotExist` for a missing, deleted or non-file inode, the whole command refused);
+`On` is the reporting node's name, at most 64 bytes. `Action`:
+- `Position` (one inode): `Dur > 0` (`ErrBadCommand` otherwise), `Pos` clamped to
+  `[0, Dur]`; the row takes `Pos`, `Dur`, `At = now`, `On`, `Hidden = false`, and becomes
+  `Watched` once `Pos ≥ Dur · 9/10`, or `Dur > 30 min` and `Pos ≥ Dur − 5 min` (integer
+  milliseconds, so every node agrees); a watched row stays watched.
+- `Played` (one inode): `Plays++` (saturating at 2³²−1), `At = now`; a new row has
+  `Dur = 0` until a position comes.
+- `Watched`, `Unwatched` (1 to `MaxBatch` inodes): each row's `Watched` set or cleared,
+  `Pos = 0` on unwatched, `At = now`; a missing row is made.
+- `Hide` (one inode): `Hidden = true`; no row → `ErrNotExist`.
+A viewer holds at most `PlaybackRows` (5000) rows: a new row past the bound drops the
+viewer's row with the oldest `(At, Ino)` in the same apply. At most `PlaybackViewers`
+(256) viewers: a command for a new viewer past it is `ErrFull`. A `Purge` that deletes a
+file removes its rows from every viewer in the same apply, and a viewer with no rows left
+is removed (rows of a file in the trash stay, so a restore keeps them). The rows are kept
+per viewer in a map and per inode in an index rebuilt on `Restore` and never encoded, so
+the purge cascade walks only the inode's viewers.
+
 **NodeUpsert of a mirror** (16 §1): a `KindMirror` row must name an `Active` device as its
 `Host`, as a disk row does (14 §1), carries no budget and no ports, and is never a
 placement, policy or repair candidate; a re-home changes only its `Host`. Removing a mirror
@@ -429,6 +453,11 @@ gated both ways, as codec 9 is: the flusher sends `Attrs` only while `MinCodec` 
 refuses it with `ErrCodec` while a live member reads codec 15 or older, which the
 flusher answers the same way in the same attempt (as I-219 does for sums). The snapshot
 frame is unchanged: the fields land in the inode's existing ones.
+Codec 17 is playback (13 §10c, I-405, I-406): op 34 `Playback`, refused with `ErrCodec`
+while a live member reads codec 16 or older (`meta.CodecPlayback`); the web gateway
+proposes none before then (503 with the codec message, and an empty Continue watching).
+Snapshot frame 16 adds the rows after the users tables, viewers in byte order and their
+rows by inode; frame 15 and older restore with none.
 
 **`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
 hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are
@@ -745,6 +774,16 @@ no divergent state to merge because it never applied uncommitted entries.
   `ErrProtected` before anything changes, the own cleanup of I-220 alone excepted;
   creating, writing and moving into a protected directory succeed; `Flags` are accepted
   on directories only.
+- **I-405** — `Playback` applies as *Apply rules* say: the viewer's shape and every inode a
+  live file checked before anything changes, the position clamped to the duration,
+  watched derived in integer milliseconds and kept until `Unwatched`, plays counted
+  saturating, hidden cleared by the next position; at most `PlaybackRows` rows per viewer
+  (the oldest `(At, Ino)` dropped) and `PlaybackViewers` viewers (`ErrFull`); a `Purge`
+  removes the purged files' rows and the viewers left with none; the per-inode index equals
+  a recount after every apply and after `Restore`.
+- **I-406** — `Playback` is codec 17: encoded and decoded at 17 only, refused with
+  `ErrCodec` while a live member reads an older codec; snapshot frame 16 round-trips the
+  rows byte-identically, and frame 15 restores with none.
 - **I-222** — An exclusive create of one name succeeds exactly once across the cluster:
   `vfs.OpenFile` with `O_CREATE|O_EXCL` answers `EEXIST` when the name resolves locally
   and also when its `Create` proposal returns `ErrExist`, never opening or truncating the
@@ -807,4 +846,6 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-220 | `TestFSM_Protected_OwnCleanup_Table`, `TestEncodeCommand_OwnTrashIsCodec8`, `TestSMB_FailedCopyCleanup_UnderProtected`, `TestSMB_DeleteExistingUnderProtected_StillRefused`, `TestDeleteOnClose_OwnCreationIsOwnCleanup`, `TestSMB_OwnCleanup_WriteRoleOnly` |
 | I-154 | `TestFSM_Protected_Table`, `TestFSM_SetAttr_Flags`, `TestVFS_Protected_EPERM`, `TestNFS_Protected_IsACCES`, `TestSMB_Protected_AccessDenied`, `TestDeleteOnClose_AsksTheBackend` |
 | I-155 | `TestStore_TrashReadAPI`, `TestFSM_Trash_Table`, `TestNFS_TrashedIsGoneFromShare`, `TestNFS_TrashedHandleStale_RestoredValid`, `TestSMB_DeletedIsGoneFromShare`, `TestVFS_Remove_TrashKeepsWAL_FlushCommits`, `TestCluster_TrashRestoreAcrossNodes`, `TestModelCheck_Long` |
+| I-405 | stub until `playback-meta`: the apply table, the watched rule in integer milliseconds, the row and viewer bounds, the purge cascade, the snapshot and restore equivalence |
+| I-406 | stub until `playback-meta`: the codec 17 golden and gating, the refusal while a member reads 16, the frame 16 round trip |
 | I-222 | `TestVFS_ExclCreate_LostRace_EEXIST`, `TestVFS_ExclCreate_UnknownOutcome_OwnFileOpens`, `TestCluster_ExclCreate_TwoGateways_OneWins`, `TestSMB_FileCreate_RacingBackend_Collision`, `TestNFS_CreateGuarded_RacingBackend_Exist`, `TestSoak_MultiUserAgainstHarness` |
