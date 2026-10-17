@@ -1913,6 +1913,9 @@ function lazy(img, e, path, root, kind2, onMiss) {
       else miss();
     });
   };
+  const wait2 = schedule2(img, job);
+}
+function schedule2(img, job) {
   const p = { img, job, queued: false };
   const wait2 = () => {
     if (!observer) return;
@@ -1925,6 +1928,25 @@ function lazy(img, e, path, root, kind2, onMiss) {
     p.queued = true;
     fast.push(job);
   }
+  return wait2;
+}
+function lazyURL(img, url, onMiss) {
+  const settle = async (f) => {
+    if (!f.src) {
+      if (img.isConnected) onMiss();
+      return;
+    }
+    if (!img.isConnected) return URL.revokeObjectURL(f.src);
+    return showBlob(img, f.src, onMiss);
+  };
+  schedule2(img, async () => {
+    pending2.delete(img);
+    observer?.unobserve(img);
+    if (!img.isConnected) return;
+    const f = await load(url);
+    if (f.later !== void 0) return later(img, () => load(url), f.later, TRIES, settle);
+    return settle(f);
+  });
 }
 function near(img) {
   const r = img.getBoundingClientRect();
@@ -4263,8 +4285,8 @@ function posterTile(it) {
   const frame2 = h("img", { alt: "" });
   if (frameOf(frame2, it, missing)) box.append(frame2);
   else if (src2) {
-    const img = h("img", { alt: "", loading: "lazy", src: src2 });
-    img.addEventListener("error", missing);
+    const img = h("img", { alt: "" });
+    lazyURL(img, src2, missing);
     box.append(img);
   } else missing();
   if (chip && !box.contains(chip)) box.append(chip);

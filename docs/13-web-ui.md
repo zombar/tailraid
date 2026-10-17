@@ -564,7 +564,9 @@ the other variants. The tiles take the shape of the platform's box art, since no
 fits every platform (SNES and N64 boxes are wide, NES and Mega Drive tall, Game Boy and
 PlayStation square): the median width-to-height ratio of the art loaded so far sets the
 grid's `--box` (3:4 until the first one loads), and a box of another shape sits whole
-inside its tile, never cropped. A game's page shows its box art at its own shape, or a
+inside its tile, never cropped. Every poster, cover and box-art tile of the Media tab
+fetches its thumbnail as a listing tile does, once near the viewport and asked again
+while the node makes it (a 202, I-374); only a miss turns it into the title card. A game's page shows its box art at its own shape, or a
 title card, its facts (platform,
 year, developer, publisher, players), its region and language chips, the description of
 its `gamelist.xml` when there is one, and its files (one row per disc or variant, the
