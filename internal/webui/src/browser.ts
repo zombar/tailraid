@@ -31,6 +31,7 @@ interface Sort {
 interface Job {
   dir: string;
   file: File;
+  label?: string; // the path below the drop target, for a file dropped inside a folder (I-404)
   sent: number;
   state: "queued" | "uploading" | "done" | "failed" | "cancelled";
   message?: string;
@@ -44,9 +45,46 @@ let onQueueChange: (() => void) | null = null;
 let onJobDone: ((j: Job) => void) | null = null;
 
 function enqueue(dir: string, files: FileList | File[]): void {
-  for (const f of Array.from(files)) queue.push({ dir, file: f, sent: 0, state: "queued" });
+  enqueueAt(Array.from(files).map((file) => ({ dir, file })));
+}
+
+/** enqueueAt queues each file for its own directory: a dropped folder's tree (I-404). */
+function enqueueAt(list: { dir: string; file: File; label?: string }[]): void {
+  for (const { dir, file, label } of list) queue.push({ dir, file, label, sent: 0, state: "queued" });
   onQueueChange?.();
   void runQueue();
+}
+
+/** skipped is the desktop's own bookkeeping a dropped folder carries, never uploaded. */
+function skipped(name: string): boolean {
+  return name === ".DS_Store" || name.startsWith("._") || name === "Thumbs.db" || name === "desktop.ini";
+}
+
+/**
+ * dropped walks what a drop held (docs/13 §4, I-404): each file with the folders it sits
+ * in below the drop target, a dropped folder's whole tree included. The entries are taken
+ * from the event before the first await: a DataTransfer is empty once its handler returns.
+ */
+async function dropped(entries: FileSystemEntry[], dir: string): Promise<{ dir: string; file: File; label: string }[]> {
+  const out: { dir: string; file: File; label: string }[] = [];
+  const walk = async (e: FileSystemEntry, rel: string): Promise<void> => {
+    if (e.isFile) {
+      const file = await new Promise<File>((ok, fail) => (e as FileSystemFileEntry).file(ok, fail));
+      if (!skipped(file.name)) out.push({ dir: rel ? join(dir, rel) : dir, file, label: rel ? join(rel, file.name) : file.name });
+      return;
+    }
+    if (!e.isDirectory) return;
+    const reader = (e as FileSystemDirectoryEntry).createReader();
+    const sub = rel ? join(rel, e.name) : e.name;
+    for (;;) {
+      // readEntries answers in batches until an empty one
+      const batch = await new Promise<FileSystemEntry[]>((ok, fail) => reader.readEntries(ok, fail));
+      if (!batch.length) break;
+      for (const k of batch) await walk(k, sub);
+    }
+  };
+  for (const e of entries) await walk(e, "");
+  return out;
 }
 
 async function runQueue(): Promise<void> {
@@ -513,7 +551,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     else if (j.state === "queued") state.append("queued ", h("button", { type: "button", onClick: () => { j.state = "cancelled"; onQueueChange?.(); } }, "cancel"));
     else if (j.state === "failed") state.append("failed: " + (j.message ?? ""));
     else state.append(j.state);
-    const el = h("div", { class: "upload" }, h("span", { class: "name" }, j.file.name), state);
+    const el = h("div", { class: "upload" }, h("span", { class: "name" }, j.label ?? j.file.name), state);
     if (j.state === "uploading") {
       const b = h("div", { class: "bar" });
       const fill = h("i");
@@ -535,10 +573,18 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     if (inTrash || asOf) return;
     ev.preventDefault();
     onDragLeave();
-    const files = Array.from(ev.dataTransfer?.files ?? []);
-    const plain = files.filter((f) => f.type !== "" || f.size > 0); // folders arrive as empty typeless entries
-    if (plain.length < files.length) toast("Folders are not supported; use New folder", "bad");
-    if (plain.length) enqueue(dir, plain);
+    const entries = Array.from(ev.dataTransfer?.items ?? [])
+      .filter((i) => i.kind === "file")
+      .map((i) => i.webkitGetAsEntry())
+      .filter((e): e is FileSystemEntry => e !== null);
+    if (!entries.length) {
+      enqueue(dir, Array.from(ev.dataTransfer?.files ?? []));
+      return;
+    }
+    void dropped(entries, dir).then(
+      (list) => (list.length ? enqueueAt(list) : toast("Nothing to upload in what was dropped", "bad")),
+      (e) => toast("drop: " + (e instanceof Error ? e.message : String(e)), "bad"),
+    );
   };
   root.addEventListener("dragover", onDragOver);
   root.addEventListener("dragleave", onDragLeave);
