@@ -546,7 +546,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			Logout: func(ctx context.Context, actor meta.UserIdx, hash [32]byte) error {
 				return ops.propose(ctx, meta.Command{Op: meta.OpSession, Actor: actor, SessionOp: &meta.SessionOp{Delete: true, Hash: hash, Now: clk.Now().UnixNano()}})
 			},
-			Node: id, // an upload's temp is this node's own (I-226); names need not be unique
+			Node: id, NodeName: cfg.Node.Name, // an upload's temp is this node's own (I-226); names need not be unique
 		})
 		if err != nil {
 			return err

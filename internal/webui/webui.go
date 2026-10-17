@@ -67,6 +67,9 @@ type Options struct {
 	// Snapshots takes snapshots and reports the mirrors (docs/16); nil answers 503 on
 	// GET /api/snapshots and POST /api/snapshot. The other snapshot routes need the FS only.
 	Snapshots SnapshotService
+	// NodeName is this node's name as people know it, recorded with a playback report
+	// ("watched on honker", docs/13 §10c); "" records none.
+	NodeName string
 	// Node is this node's ID (unique, unlike a host name): an upload's temp carries it,
 	// so uploads of one name through two gateways never share one (docs/13 §4, I-226).
 	// "" = the plain temp name.
@@ -113,6 +116,7 @@ type Server struct {
 	thumbs   thumbJobs     // thumbnails being made in the background (I-374)
 	covers   coverCache
 	codes    users.CodeLog // the sign-in codes this node opened (I-354)
+	play     playCoalesce  // when each viewer's position of each file was last proposed (I-408)
 }
 
 // New validates the options and builds the handler.
@@ -154,6 +158,8 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("GET /api/search/suggest", s.suggest)
 	mux.HandleFunc("GET /api/render", s.render)
 	mux.HandleFunc("GET /api/media", s.media)
+	mux.HandleFunc("GET /api/playback", s.playbackGet)
+	mux.HandleFunc("POST /api/playback", csrf(s.playbackPost))
 	mux.HandleFunc("GET /files/{path...}", s.get) // a GET pattern serves HEAD too
 	mux.HandleFunc("PUT /files/{path...}", csrf(s.put))
 	mux.HandleFunc("POST /api/mkdir", csrf(s.mkdir))
@@ -293,7 +299,7 @@ func errStatus(err error) int {
 	case errors.Is(err, rpc.ErrNoRestoreJobs):
 		return http.StatusNotImplemented // the mirror's host runs a version without them
 	case errors.Is(err, os.ErrExist), errors.Is(err, meta.ErrExist), errors.Is(err, admin.ErrAmbiguous),
-		errors.Is(err, meta.ErrInTrash), errors.Is(err, meta.ErrNotEmpty), errors.Is(err, syscall.ENOTEMPTY):
+		errors.Is(err, meta.ErrInTrash), errors.Is(err, meta.ErrNotEmpty), errors.Is(err, syscall.ENOTEMPTY), errors.Is(err, meta.ErrPlaybackFull):
 		return http.StatusConflict
 	case errors.Is(err, meta.ErrProtected), errors.Is(err, syscall.EPERM), errors.Is(err, os.ErrPermission):
 		return http.StatusForbidden // under a protected folder (I-154, I-163)

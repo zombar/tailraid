@@ -212,3 +212,37 @@ func TestStatic_StatsStreamsFramesFirst(t *testing.T) {
 		t.Error("stats.ts does not refresh with the charts on screen")
 	}
 }
+
+// The Media tab's Play opens the viewer and an album card the album viewer: no route of
+// the tab leads to the file view or the folder of an album (docs/13 §10a, §10b).
+// Invariant: I-414
+func TestStatic_MediaRoutesNeverFileRoute(t *testing.T) {
+	src := func(name string) string {
+		b, err := os.ReadFile(filepath.Join("src", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	m := src("media.ts")
+	for _, banned := range []string{"fileHash(", "#/file/"} {
+		if strings.Contains(m, banned) {
+			t.Errorf("media.ts uses %s: Play must open the viewer", banned)
+		}
+	}
+	for _, want := range []string{"playHash(", "albumHash("} {
+		if !strings.Contains(m, want) {
+			t.Errorf("media.ts never uses %s", want)
+		}
+	}
+	if !regexp.MustCompile(`it\.kind === "album" \? albumHash\(`).MatchString(m) {
+		t.Error("an album card does not link the album viewer")
+	}
+	v := src("viewer.ts")
+	if !strings.Contains(v, "requestFullscreen") || !strings.Contains(v, "webkitEnterFullscreen") {
+		t.Error("the viewer does not ask for fullscreen")
+	}
+	if !strings.Contains(src("main.ts"), "viewer.isOverlay(hash)") {
+		t.Error("the router does not keep the page under the viewer")
+	}
+}
