@@ -223,6 +223,8 @@ func (a *applier) apply(c Command) (Result, error) {
 		return Result{}, a.snapshotDelete(c.SnapshotDelete)
 	case OpSnapshotImport:
 		return a.snapshotImport(c.SnapshotImport)
+	case OpSnapshotHeal:
+		return Result{}, a.snapshotHeal(c.SnapshotHeal)
 	case OpSecretKeyInit:
 		return Result{}, a.secretKeyInit(c.SecretKeyInit)
 	case OpSecretPut:

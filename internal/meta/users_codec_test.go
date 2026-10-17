@@ -33,7 +33,7 @@ func TestCodec14_OlderReaderRefuses(t *testing.T) {
 		{Op: OpTrash, Actor: 3, Trash: &Trash{Parent: 1, Name: "f", Own: true, Now: 12}},                  // a codec-8 body
 		{Op: OpSecretPut, Actor: 2, SecretPut: &SecretPut{Secret: Secret{Name: "user/lee/x", KeyID: KeyID{1}, Cipher: bytes.Repeat([]byte{7}, 20), By: 1, ByUser: 2}, Now: 13}},
 	} {
-		if v := CommandCodec(c); v != commandVersionV14 || CodecUsers != commandVersionV14 || CodecVersion != commandVersionV14 {
+		if v := CommandCodec(c); v != commandVersionV14 || CodecUsers != commandVersionV14 || CodecVersion != commandVersionV15 {
 			t.Fatalf("op %d: version %d", c.Op, v)
 		}
 		b := MustEncodeCommand(c)

@@ -41,6 +41,8 @@ const (
 	OpGroup   Op = 30 // {Action, Name, Group, User, Now} (I-346)
 	OpGrant   Op = 31 // {Ino, Subject, Role, Now}: a grant set, or cleared with RoleNone (I-347)
 	OpSession Op = 32 // {Delete, All, Hash, User, Key, ExpiresAt, Now}: a browser session of the volume (I-354)
+
+	OpSnapshotHeal Op = 33 // {ID, Missing, Now}: an incomplete snapshot's missing count falls (docs/16 §5, codec 15)
 )
 
 // commandVersion is the codec version of a log entry. Version 2 is written only for a
@@ -69,6 +71,12 @@ const (
 	// op can carry its actor without a second layout; the users ops 28–32 and a secret
 	// with its user are written at inner version 14. An older binary refuses the entry.
 	commandVersionV14 = 14
+	// commandVersionV15: SnapshotHeal (docs/16 §5, I-393); an older binary does not know
+	// the op.
+	commandVersionV15 = 15
+	// CodecHeal is the codec every live member must read before the mirror's host
+	// proposes a heal (docs/02 §Codec versions).
+	CodecHeal = commandVersionV15
 	// CodecUsers is the codec every live member must read before a command carries an
 	// actor or a users op is proposed; enforcement itself waits for the first user.
 	CodecUsers = commandVersionV14
@@ -94,7 +102,7 @@ const (
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 14
+	CodecVersion = 15
 )
 
 // SetAttr mask bits.
@@ -284,6 +292,14 @@ type SnapshotImport struct {
 	Now      int64
 }
 
+// SnapshotHeal lowers an incomplete snapshot's missing count to what its manifest on the
+// mirror still lists, after the mirror's host wrote the chunks it found (docs/16 §5).
+type SnapshotHeal struct {
+	ID      SnapID
+	Missing uint32
+	Now     int64
+}
+
 // ChunkWrite assigns chunk slot Idx of the committed file; Hash may be HashZero.
 type ChunkWrite struct {
 	Idx  uint32
@@ -345,6 +361,7 @@ type Command struct {
 	SnapshotEnd    *SnapshotEnd
 	SnapshotDelete *SnapshotDelete
 	SnapshotImport *SnapshotImport
+	SnapshotHeal   *SnapshotHeal // codec 15
 	// docs/19, codec 11
 	SecretKeyInit *SecretKeyInit
 	SecretPut     *SecretPut
@@ -407,6 +424,10 @@ func needsV7(c Command) bool {
 	}
 	return false
 }
+
+// needsV15 reports whether c is a snapshot heal (docs/16 §5): an older binary cannot
+// decode the op, so the leader refuses it while such a member is live (I-391).
+func needsV15(c Command) bool { return c.Op == OpSnapshotHeal }
 
 // needsV11 reports whether c is a secrets store op (docs/19): an older binary cannot
 // decode the ops, so the leader refuses them while such a member is live (I-307).
@@ -493,7 +514,7 @@ func MustEncodeCommand(c Command) []byte {
 // member cannot read (docs/12 §6, I-156).
 func CommandCodec(c Command) uint8 {
 	if needsV14(c) {
-		return commandVersionV14
+		return max(commandVersionV14, baseCodec(c)) // a body newer than the header still needs its own codec
 	}
 	return baseCodec(c)
 }
@@ -504,6 +525,8 @@ func baseCodec(c Command) uint8 {
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
+	case needsV15(c):
+		return commandVersionV15
 	case needsV11(c):
 		return commandVersionV11
 	case needsV10(c):
@@ -728,6 +751,11 @@ func encodeBody(w *writer, c Command, v uint8) {
 		w.u64(p.NewBytes)
 		w.u32(p.Missing)
 		w.i64(p.Now)
+	case OpSnapshotHeal:
+		p := mustPayload(c.SnapshotHeal, c.Op)
+		w.u32(uint32(p.ID))
+		w.u32(p.Missing)
+		w.i64(p.Now)
 	case OpSecretKeyInit:
 		p := mustPayload(c.SecretKeyInit, c.Op)
 		w.b = append(w.b, p.ID[:]...)
@@ -770,7 +798,7 @@ func DecodeCommand(b []byte) (Command, error) {
 		c.System = r.bool()
 		v = r.u8()
 	}
-	if r.err == nil && (v < commandVersion || v > commandVersionV14 || v == 12 || v == 13 || (v == commandVersionV14 && !wrapped)) { // 12 is sealed S3's, never written yet; 13 was the withdrawn mesh
+	if r.err == nil && (v < commandVersion || v > commandVersionV15 || v == 12 || v == 13 || (v == commandVersionV14 && !wrapped)) { // 12 is sealed S3's, never written yet; 13 was the withdrawn mesh
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -803,11 +831,13 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = c.Op == OpSecretKeyInit || c.Op == OpSecretPut || c.Op == OpSecretDelete
 	case commandVersionV14:
 		legal = isUsersOp(c.Op) || c.Op == OpSecretPut
+	case commandVersionV15:
+		legal = c.Op == OpSnapshotHeal
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums &&
 			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete && c.Op != OpSnapshotImport &&
 			c.Op != OpSecretKeyInit && c.Op != OpSecretPut && c.Op != OpSecretDelete &&
-			!isUsersOp(c.Op)
+			c.Op != OpSnapshotHeal && !isUsersOp(c.Op)
 	}
 	if !legal {
 		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
@@ -928,6 +958,8 @@ func DecodeCommand(b []byte) (Command, error) {
 			Mirror: NodeIdx(r.u16()), After: SnapID(r.u32()), Name: r.str(), At: r.i64(), Auto: r.bool(), Root: r.hash(),
 			Files: r.u64(), Bytes: r.u64(), NewBytes: r.u64(), Missing: r.u32(), Now: r.i64(),
 		}
+	case OpSnapshotHeal:
+		c.SnapshotHeal = &SnapshotHeal{ID: SnapID(r.u32()), Missing: r.u32(), Now: r.i64()}
 	case OpSecretKeyInit:
 		p := &SecretKeyInit{}
 		copy(p.ID[:], r.take(len(p.ID)))

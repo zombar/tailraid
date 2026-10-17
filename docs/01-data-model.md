@@ -312,7 +312,7 @@ A version is legal only for the ops that need it (2: `NodeUpsert` with a host; 3
 `Flags`; 5 and 6: 02 §Codec versions; 7: `SnapshotBegin`, `SnapshotEnd`,
 `SnapshotDelete`, `SnapshotImport` and a `NodeUpsert` of a `KindMirror` row; 8: a `Trash`
 with `Own`; 9: a `Commit` with `Rewrite` or `RewriteStart`, a `Trash` with `Expect` and a `Rename`
-with `NoReplace`, I-223..I-226), so an entry can never smuggle
+with `NoReplace`, I-223..I-226; 15: `SnapshotHeal`, I-393), so an entry can never smuggle
 a field an older reader would misparse.
 
 **Snapshot frame** (`EncodeState`):

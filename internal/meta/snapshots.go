@@ -54,6 +54,27 @@ func (a *applier) snapshotEnd(c *SnapshotEnd) error {
 	return nil
 }
 
+// snapshotHeal lowers a finished row's missing count to what its manifest still lists,
+// complete at zero; the count never rises (docs/16 §5, I-391).
+func (a *applier) snapshotHeal(c *SnapshotHeal) error {
+	if c == nil {
+		return ErrBadCommand
+	}
+	sn, ok := a.st.Snaps[c.ID]
+	if !ok || (sn.State != SnapComplete && sn.State != SnapIncomplete) {
+		return ErrNotExist
+	}
+	if c.Missing > sn.Missing {
+		return ErrBadCommand
+	}
+	a.clock(c.Now)
+	sn.Missing = c.Missing
+	if sn.Missing == 0 {
+		sn.State = SnapComplete
+	}
+	return nil
+}
+
 // snapshotDelete is the two-step deletion of docs/16 §5: the leader's thinning marks a
 // row Deleting, and the mirror's host, once it has swept the snapshot off the disk,
 // removes the row with Done. No user path proposes it (I-183).
