@@ -97,6 +97,9 @@ type    := 1 write    off = file offset, data = the bytes
                       data = size u64 | minSize u64 | sizeSet u8 | ranges u32 | (start u64,
                       end u64)…: the file ranges a Commit made durable and the inode's state
                       after it
+           7 attrs    off = mask (mode 1, uid 2, gid 4, atime 8, mtime 16); data = mode u32 |
+                      uid u32 | gid u32 | atime i64 | mtime i64: a client's SETATTR on the
+                      dirty file, pending until its flush (§6, I-401)
 ```
 
 `crc32c` covers `type|off|len|data`. All integers little-endian. A *log position* is
@@ -449,18 +452,29 @@ request context and read through `ReadAt`.
   the new size with the old time. The write time is this gateway's clock and the flush's
   the leader's, so a gateway whose clock runs ahead can see mtime step back slightly at
   the flush.
-- **A client's times outlive the flush** (I-230). A Commit stamps the inode's mtime and
-  ctime with its own time, as the data's change. A copy, though, writes a file and then
-  sets the source's times as its last step (`cp -p`, `rsync -a`, robocopy, Explorer's
-  SET_INFO basic), seconds before the flush commits that data. The times a client sets
-  while the file has unflushed writes, after its last write, are noted in the overlay and
-  set again by the flusher with a `SetAttr` right after every Commit of that file; a
-  later write or truncate clears them, being newer than they are. Until 2026-10-12 every
-  copied file showed the flush's time, so robocopy and rsync copied everything again on
-  their next run. Times set on another gateway than the one holding the dirty data are
-  not noted there: that Commit still stamps over them. A time outside what the inode
-  holds (nanoseconds since 1970 in an int64, 1677–2262) is held at the nearest end, not
-  wrapped (a FILETIME of 1601 had read back as 2185).
+- **A file being written lands whole** (I-401, I-230). A copy creates a file, writes it
+  and then sets its mode, owner and the source's times (`cp -p`, `rsync -a`, Finder,
+  robocopy, Explorer's SET_INFO basic): measured on macOS, one `cp -p` of a 6-byte file
+  sent 14 SETATTRs for the file and its AppleDouble `._` companion, each a Raft proposal
+  to the leader before 2026-10-17. A SETATTR of mode, owner or times on a file this
+  gateway holds unflushed data for proposes nothing: it is logged in the inode's WAL (an
+  `attrs` record, fsynced before the reply, so an acknowledged SETATTR survives a crash
+  like an acknowledged WRITE), this gateway's GETATTR shows it at once, and the flush's
+  Commit carries it (`Commit.Attrs`, codec 16), applied after the Commit stamps its own
+  mtime and ctime. A later write or truncate drops the pending times, being newer than
+  they are, but keeps the mode and owner; a flush that fails keeps them pending, and a
+  flush whose data is dropped (superseded, refused, the file gone) drops them with it.
+  Other gateways see the new mode, owner and times with the data, at the flush (within
+  the idle timer after the copy pauses, §3), and until then the create's. A SETATTR on a
+  file with nothing dirty here, or one with a size, is proposed as before, and one that
+  changes nothing proposes nothing at all (I-402). While a live member reads codec 15 or
+  older the flusher proposes the pending attributes as a `SetAttr` right after the Commit
+  (what every release before codec 16 did for times). Times set on another gateway than
+  the one holding the dirty data are not noted there: that Commit still stamps over
+  them. A time outside what the inode holds (nanoseconds since 1970 in an int64,
+  1677–2262) is held at the nearest end, not wrapped (a FILETIME of 1601 had read back
+  as 2185). Until 2026-10-12 every copied file showed the flush's time, so robocopy and
+  rsync copied everything again on their next run.
 - **Other gateways:** see the previous committed version until their FSM applies the Commit
   (milliseconds after Raft commit). They never see a torn mixture of old and new chunks,
   because the chunk list is replaced atomically by one Commit.
@@ -682,9 +696,17 @@ the WAL cap.
   overlay's size; after the flush they are the Commit's.
 - **I-230** — Times a client sets on a file (`Chtimes`: SMB SET_INFO basic, NFS SETATTR)
   after its last write and while that write is unflushed are the file's times after the
-  flush; a write or truncate after them makes the
-  flush's time win; a time before 1677-09-21 or after 2262-04-11 reads back as that
-  bound, never as another date.
+  flush; a write or truncate after them makes the flush's time win; a time before
+  1677-09-21 or after 2262-04-11 reads back as that bound, never as another date.
+- **I-401** — A SETATTR of mode, owner or times on a file the gateway holds unflushed data
+  for proposes nothing: it is fsynced in the inode's WAL before the reply, shown by that
+  gateway at once, replayed after a restart, and committed by the flush (`Commit.Attrs`,
+  codec 16, or a `SetAttr` after the Commit while a live member reads an older codec);
+  a later write or truncate drops its times and keeps its mode and owner; an aborted
+  flush keeps it pending and a dropped one drops it.
+- **I-402** — A SETATTR that changes nothing the inode holds proposes nothing.
+- **I-403** — `status` reports `gateway.proposals`, the proposals this gateway's filesystem
+  made since start by op, and `gateway.attrs_deferred`, the SETATTRs it held for a flush.
 - **I-219** — A Commit the leader refuses with `ErrCodec` (its view of the members' codec
   is older than the gateway's, as during a rolling upgrade) is built again without
   `Sums` and proposed again within the same flush attempt, so the codec gate never fails
@@ -726,4 +748,7 @@ the WAL cap.
 | I-98 | `TestReader_HedgesStalledHolder` |
 | I-261 | `TestVFS_DirtyFile_ReportsItsWriteTime` |
 | I-230 | `TestVFS_UserTimes_SurviveFlush`, `TestSMB_CopyTimes_SurviveFlush` |
+| I-401 | `TestStub_I_401` |
+| I-402 | `TestStub_I_402` |
+| I-403 | `TestStub_I_403` |
 | I-101 | `TestWAL_FsyncFailureReopens`, `TestWAL_CompactReopenFailureClosesLog` |

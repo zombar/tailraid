@@ -421,6 +421,14 @@ Now}`, refused with `ErrCodec` while a live member reads codec 14 or older
 (`meta.CodecHeal`); the mirror's host proposes none before then. The snapshot frame is
 unchanged: a heal changes only a row's `Missing` and `State`, fields frame 7 already
 carries. Under a codec-14 header (an actor or `System`) the inner body keeps version 15.
+Codec 16 is a `Commit` with `Attrs` (04 §6, I-401): the mode, owner and times a client set
+on the file while its data was dirty on the gateway (a mask and the five fields of a
+`SetAttr`), applied after the Commit's own `Now` stamp with `SetAttr`'s rules. It is
+gated both ways, as codec 9 is: the flusher sends `Attrs` only while `MinCodec` is 16
+(`meta.CodecAttrs`), else it proposes a plain Commit and then a `SetAttr`, and the leader
+refuses it with `ErrCodec` while a live member reads codec 15 or older, which the
+flusher answers the same way in the same attempt (as I-219 does for sums). The snapshot
+frame is unchanged: the fields land in the inode's existing ones.
 
 **`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
 hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are
