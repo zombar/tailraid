@@ -436,6 +436,7 @@ func TestAdminOps_AsAdmin_UnderUsers(t *testing.T) {
 		{Op: "user_disable", User: "lee"},
 		{Op: "user_enable", User: "lee"},
 		{Op: "user_rm", User: "lee"},
+		{Op: "scrape_skip", Path: "/docs", Kind: "movie", Ino: inos["c"]}, // a marker under /.tailraid, as the node (I-394)
 	}
 	ran := map[string]bool{}
 	ctx := context.Background()

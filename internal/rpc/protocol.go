@@ -272,7 +272,9 @@ type AdminOp struct {
 	DryRun    bool   `json:"dry_run,omitempty"` // rebalance: list the home moves, open nothing (docs/14 §7)
 	// search (docs/18 §6, this node's index): the words, the folder to search under (Path)
 	// and the most hits to return; index_now runs the leader's pass (a pass op, I-189); scrape_plan (docs/18 §11)
-	// lists the items under Path missing a sidecar, at most Limit after Cursor
+	// lists the items under Path missing a sidecar, at most Limit after Cursor (All: also
+	// those answered "no match"); scrape_skip remembers the item Ino of Kind at Path as
+	// "no match" (I-394)
 	Query string `json:"query,omitempty"`
 	Limit int    `json:"limit,omitempty"`
 	// secret_set, secret_get, secret_ls, secret_rm (docs/19 §5): the secret's name (Name)
@@ -324,8 +326,8 @@ var adminNeeds = map[string]Need{
 	"secret_set": NeedUser, "secret_get": NeedUser, "secret_ls": NeedUser, "secret_rm": NeedUser,
 	"user_whoami": NeedUser, "user_key_invite": NeedUser, "user_key_rm": NeedUser, "user_bind": NeedUser, "user_unbind": NeedUser,
 	"web_login": NeedUser, "web_logout": NeedUser, "audit_ls": NeedUser,
-	"trash_restore": NeedWriteOn,
-	"trash_purge":   NeedAdminOn, "cache_pin": NeedAdminOn, "cache_unpin": NeedAdminOn, "snapshot_restore": NeedAdminOn, "restore_cancel": NeedUser,
+	"trash_restore": NeedWriteOn, "scrape_skip": NeedWriteOn,
+	"trash_purge": NeedAdminOn, "cache_pin": NeedAdminOn, "cache_unpin": NeedAdminOn, "snapshot_restore": NeedAdminOn, "restore_cancel": NeedUser,
 	"versions_revert": NeedAdminOn, "versions_copy": NeedAdminOn, "grant": NeedAdminOn, "revoke": NeedAdminOn,
 	"repair_now": NeedAdmins, "gc_now": NeedAdmins, "index_now": NeedAdmins, "rebalance": NeedAdmins, "set_policy": NeedAdmins,
 	"rotate_token": NeedAdmins, "open_disk": NeedAdmins, "open_mirror": NeedAdmins, "snapshot_create": NeedAdmins,
