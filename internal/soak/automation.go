@@ -37,7 +37,9 @@ func phaseAutomation(ctx context.Context, r *Run) error {
 	} else {
 		r.checkSkipped("I-74", "the store's cap follows the disk", "budget checks need the dev endpoints (run with dev.enabled and --destructive)")
 	}
-	r.voterFirstChecks(ctx, rep)
+	if err := r.voterFirstChecks(ctx); err != nil {
+		return err
+	}
 	if !r.Env.Caps().Mutate {
 		r.checkSkipped("I-75", "policy equals the rule of the member table", "a policy change needs --destructive on a live cluster")
 		return nil
@@ -136,8 +138,17 @@ func (r *Run) budgetChecks(ctx context.Context, rep admin.Report) error {
 }
 
 // voterFirstChecks: for the corpus this run wrote, every chunk's data slots sit on voters
-// while at least k voters are live (I-77).
-func (r *Run) voterFirstChecks(ctx context.Context, rep admin.Report) {
+// while at least k voters are live (I-77). Home placement holds a data slot that a refill
+// or migration put on a non-voter (a voter disk that could not take a shard just then)
+// until the home gate moves it, and a pass moves nothing home while any chunk is bad
+// (docs/14 §7, I-295), so the earlier phases' faults can leave the corpus away; the check
+// runs repair until the gate shuts first (soak 2026-10-17: phase 7's migrations ran five
+// seconds after n1's restart and the moves were still queued when the phase began).
+func (r *Run) voterFirstChecks(ctx context.Context) error {
+	rep, err := r.repairUntilClean(ctx)
+	if err != nil {
+		return err
+	}
 	vt := voterTargets(rep) // a disk of a voter is a voter target (docs/14 §5)
 	voters := map[int]bool{}
 	liveVoters := 0
@@ -177,8 +188,10 @@ func (r *Run) voterFirstChecks(ctx context.Context, rep admin.Report) {
 			}
 		}
 	}
+	h := r.lastRepair // the last pass repairUntilClean ran: what was still away from home
 	r.check("I-77", "data slots of the corpus sit on voters", bad == 0 && chunks > 0,
-		fmt.Sprintf("%d chunks inspected over %d files, %d with a data slot off the voters; %s", chunks, len(paths), bad, first))
+		fmt.Sprintf("%d chunks inspected over %d files, %d with a data slot off the voters (home: %d away, %s movable, gate open %v); %s", chunks, len(paths), bad, h.AwaySlots, humanBytes(float64(h.MovableBytes)), h.HomeOpen, first))
+	return nil
 }
 
 // autoPolicyChecks: auto mode moves the policy to AutoPolicy of the member table and the
