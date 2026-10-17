@@ -497,3 +497,36 @@ func TestWebUI_Revert_Copy_RestoreTree(t *testing.T) {
 		t.Error("a restore changed the mirror")
 	}
 }
+
+// A mirror's card warns `incomplete` only while its newest finished snapshot is
+// incomplete: a later complete one ends the warning, the older one keeping its missing
+// count in the table (docs/16 §5, I-392).
+// Invariant: I-392
+func TestWebUI_MirrorWarnsOnlyForNewestIncomplete(t *testing.T) {
+	s := newSnapUI(t)
+	s.svc.mirrors = []admin.MirrorReport{{Idx: s.m, Name: "host/m1", Host: "one", Self: true, Online: true, Free: 1 << 40, Total: 1 << 40}}
+	row := func(name string, missing uint32) {
+		s.f.Clk.Advance(time.Minute)
+		now := s.f.Clk.Now().UnixNano()
+		id := s.f.MustApply(meta.Command{Op: meta.OpSnapshotBegin, SnapshotBegin: &meta.SnapshotBegin{Mirror: s.m, Name: name, Now: now}}).SnapID
+		s.f.MustApply(meta.Command{Op: meta.OpSnapshotEnd, SnapshotEnd: &meta.SnapshotEnd{ID: id, OK: true, Missing: missing, Now: now}})
+	}
+	var got struct {
+		Mirrors   []webui.MirrorJSON   `json:"mirrors"`
+		Snapshots []webui.SnapshotJSON `json:"snapshots"`
+	}
+	row("old", 2)
+	must(t, json.Unmarshal(s.body("/api/snapshots"), &got))
+	if len(got.Mirrors) != 1 || got.Mirrors[0].Warn != "incomplete" {
+		t.Fatalf("the newest snapshot is incomplete: %+v", got.Mirrors)
+	}
+	row("new", 0)
+	got.Mirrors, got.Snapshots = nil, nil // warn is omitted when empty
+	must(t, json.Unmarshal(s.body("/api/snapshots"), &got))
+	if got.Mirrors[0].Warn != "" {
+		t.Fatalf("a complete snapshot came since: the card warns %q", got.Mirrors[0].Warn)
+	}
+	if len(got.Snapshots) != 2 || got.Snapshots[1].Name != "old" || got.Snapshots[1].State != "incomplete" || got.Snapshots[1].Missing != 2 {
+		t.Fatalf("the older snapshot keeps its count in the table: %+v", got.Snapshots)
+	}
+}

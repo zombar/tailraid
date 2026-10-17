@@ -1163,7 +1163,7 @@ func (g *cmdGen) snapshotCmd(name string) Command {
 	sn := snaps[g.rng.Intn(len(snaps))]
 	switch g.rng.Intn(3) {
 	case 0:
-		return Command{Op: OpSnapshotEnd, SnapshotEnd: &SnapshotEnd{ID: sn.ID, OK: g.rng.Intn(4) != 0, Missing: uint32(g.rng.Intn(2)), Now: g.now}}
+		return Command{Op: OpSnapshotEnd, SnapshotEnd: &SnapshotEnd{ID: sn.ID, OK: g.rng.Intn(4) != 0, Missing: uint32(g.rng.Intn(4)), Now: g.now}}
 	case 1:
 		return Command{Op: OpSnapshotDelete, SnapshotDelete: &SnapshotDelete{ID: sn.ID, Done: sn.State == SnapDeleting, Now: g.now}}
 	case 2:
@@ -1173,6 +1173,8 @@ func (g *cmdGen) snapshotCmd(name string) Command {
 				At: g.now - 1000, Auto: g.rng.Intn(2) == 0, Root: Hash{byte(g.rng.Intn(256))}, Files: 1, Missing: uint32(g.rng.Intn(2)), Now: g.now,
 			}}
 		}
+		// the host healed part of it, or a heal that would raise the count (refused, I-391)
+		return Command{Op: OpSnapshotHeal, SnapshotHeal: &SnapshotHeal{ID: sn.ID, Missing: uint32(g.rng.Intn(int(sn.Missing) + 2)), Now: g.now}}
 	}
 	return Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: g.now}}
 }

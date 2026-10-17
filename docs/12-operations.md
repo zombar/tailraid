@@ -240,7 +240,7 @@ I-128):
 `node ls` and `status` show in VERSION what each node's `serve` runs: a node reports its
 version into its own row at start (02 §Lifecycle commands, I-133).
 
-Log entries carry codec version 1 to 11 and 14, and snapshots version 15 (02 §Codec versions;
+Log entries carry codec version 1 to 11, 14 and 15, and snapshots version 15 (02 §Codec versions;
 every older version is still read). `/health` reports the newest version a node writes
 (`meta.CodecVersion`), `join` refuses a cluster whose node reports a newer one, and a
 node that meets an entry it cannot decode counts it (`status` shows
@@ -589,7 +589,8 @@ ended, next_try, yielding}]`, every restore job of every live host and those fin
 days (docs/16 §6), and `tailraid status` prints one line per unfinished job (`restore
 3-7  /music on honker · running · 280.1 GiB of 895.0 GiB · 41.0 MiB/s · 4 h 16 m left`). `check` warns when a mirror has been offline longer than
 `mirrors.stale_after`, when an online mirror's newest snapshot is older than `2 × every`,
-when a snapshot is incomplete, and when a mirror is under its free-space reserve.
+when a mirror's newest snapshot is incomplete (an older one heals itself once its missing
+chunks can be had, docs/16 §5), and when a mirror is under its free-space reserve.
 
 Three things to know as an operator. A first sync copies the whole volume and may take
 many hours; it is resumable (a failed sync keeps what it wrote), and the pool holds GC back
@@ -761,8 +762,8 @@ The audit log is in the volume under `/.tailraid/audit/`, readable by `audit ls`
   `tailraid export` is the metadata export of §9; `snapshot ls|create|restore` (no removal verb) and
   `versions` drive docs/16 through the admin RPC; `status` reports each mirror and the
   catalogue count; `check` warns for a mirror offline past `stale_after`, an online
-  mirror whose newest snapshot is older than `2 × every`, an incomplete snapshot and a
-  mirror under its reserve; and `Validate` refuses the `mirrors` keys out of bounds.
+  mirror whose newest snapshot is older than `2 × every`, a mirror whose newest snapshot is
+  incomplete and a mirror under its reserve; and `Validate` refuses the `mirrors` keys out of bounds.
 
 - **I-234** — `trash_ls` with a page budget answers the deleted roots after its cursor in
   the trash's order (deletion time, newest first, then inode), as many as fit in the

@@ -277,12 +277,14 @@ func (s *Server) snapshots(w http.ResponseWriter, _ *http.Request) {
 			Files: sn.Files, Bytes: sn.Bytes, NewBytes: sn.NewBytes, Missing: sn.Missing,
 		})
 		if sn.State == meta.SnapComplete || sn.State == meta.SnapIncomplete {
+			if _, seen := newest[sn.Mirror]; !seen { // newest first: the mirror's newest finished snapshot warns, an older one does not (I-392)
+				incomplete[sn.Mirror] = sn.State == meta.SnapIncomplete
+			}
 			newest[sn.Mirror] = max(newest[sn.Mirror], sn.At)
 			if sn.Auto {
 				newestAuto[sn.Mirror] = max(newestAuto[sn.Mirror], sn.At)
 			}
 		}
-		incomplete[sn.Mirror] = incomplete[sn.Mirror] || sn.State == meta.SnapIncomplete
 	}
 	mirrors := []MirrorJSON{}
 	var next time.Time

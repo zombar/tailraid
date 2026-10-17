@@ -341,6 +341,9 @@ func (s *mirrorSet) tick(ctx context.Context) {
 				}
 			}
 		}
+		if !syncing {
+			s.heal(ctx, d, rows, now)
+		}
 		full := d.Total > 0 && d.Free < mirrorReserve(d.Total)
 		for _, id := range s.unheld(drop(rows, now, s.pol, full)) {
 			s.do(ctx, "thin", meta.Command{Op: meta.OpSnapshotDelete, SnapshotDelete: &meta.SnapshotDelete{ID: id, Now: now.UnixNano()}})
@@ -352,6 +355,36 @@ func (s *mirrorSet) tick(ctx context.Context) {
 				s.log.Warn("snapshot not begun", "mirror", d.Row.Name, "err", err)
 			}
 		}
+	}
+}
+
+// heal shortens the missing list of every incomplete snapshot on d with the chunks the
+// mirror holds now or the pool reads now, and proposes each row's new count (docs/16 §5,
+// I-391). The manifest is rewritten first, so a heal lost to a failed proposal is
+// proposed again from the shorter manifest on the next tick. Nothing is done while a
+// live member reads a codec older than 15, which could not decode the heal.
+func (s *mirrorSet) heal(ctx context.Context, d *mirrorDisk, rows []meta.Snapshot, now time.Time) {
+	if s.minCodec != nil && s.minCodec() < meta.CodecHeal {
+		return
+	}
+	for _, r := range rows {
+		if r.State != meta.SnapIncomplete {
+			continue
+		}
+		left, err := d.m.Heal(ctx, uint32(r.ID), s.read)
+		if err != nil {
+			s.log.Warn("mirror: snapshot not healed", "mirror", d.Row.Name, "snapshot", r.Name, "err", err)
+			continue
+		}
+		if uint32(left) >= r.Missing {
+			continue
+		}
+		err = s.propose(ctx, meta.Command{Op: meta.OpSnapshotHeal, SnapshotHeal: &meta.SnapshotHeal{ID: r.ID, Missing: uint32(left), Now: now.UnixNano()}})
+		if err != nil && !errors.Is(err, meta.ErrNotExist) {
+			s.log.Warn("mirror: snapshot heal not recorded", "mirror", d.Row.Name, "snapshot", r.Name, "err", err)
+			continue
+		}
+		s.log.Info("mirror: snapshot healed", "mirror", d.Row.Name, "snapshot", r.Name, "missing", left, "was", r.Missing)
 	}
 }
 
@@ -534,6 +567,7 @@ func (s *mirrorSet) report(now time.Time, snaps []meta.Snapshot) ([]admin.Mirror
 		d := &seen[i]
 		r := admin.MirrorReport{Idx: d.Row.Idx, Name: d.Row.Name, Self: true, Path: d.Path, Online: d.Online, Reason: d.Reason, Used: d.Used, Free: d.Free, Total: d.Total}
 		syncing := false
+		var newest *meta.Snapshot // the newest finished snapshot: only it warns when incomplete (I-392)
 		for j := range snaps {
 			sn := &snaps[j]
 			if sn.Mirror != d.Row.Idx || d.Row.Idx == 0 {
@@ -544,11 +578,14 @@ func (s *mirrorSet) report(now time.Time, snaps []meta.Snapshot) ([]admin.Mirror
 				syncing = true
 			case meta.SnapComplete, meta.SnapIncomplete:
 				r.Newest = max(r.Newest, sn.At)
-				if sn.State == meta.SnapIncomplete {
-					warn = append(warn, fmt.Sprintf("mirror %s: snapshot %s is missing %d chunks (the next sync tries them again)", d.Row.Name, sn.Name, sn.Missing))
+				if newest == nil || sn.At > newest.At || (sn.At == newest.At && sn.ID > newest.ID) {
+					newest = sn
 				}
 			case meta.SnapDeleting:
 			}
+		}
+		if newest != nil && newest.State == meta.SnapIncomplete {
+			warn = append(warn, fmt.Sprintf("mirror %s: snapshot %s is missing %d chunks (the next sync tries them again)", d.Row.Name, newest.Name, newest.Missing))
 		}
 		name := cmp.Or(d.Row.Name, d.Path)
 		age := now.Sub(time.Unix(0, r.Newest))

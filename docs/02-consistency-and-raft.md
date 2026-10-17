@@ -356,6 +356,12 @@ the clock's, so the schedule thins an imported snapshot by when it was taken. No
 begins: the snapshot is already on the disk. The op joined codec 7 before that codec's
 first release.
 
+**SnapshotHeal** (16 §5, codec 15). The mirror's host healed part of an incomplete
+snapshot: `ID` must be a `Complete` or `Incomplete` row (`ErrNotExist` otherwise: a
+syncing, deleting or removed one), and `Missing` at most the row's (`ErrBadCommand`
+otherwise: the count only falls). Sets the row's `Missing`, and `State: Complete` when it
+is zero; nothing else changes, and no hold begins or ends.
+
 **NodeUpsert of a mirror** (16 §1): a `KindMirror` row must name an `Active` device as its
 `Host`, as a disk row does (14 §1), carries no budget and no ports, and is never a
 placement, policy or repair candidate; a re-home changes only its `Host`. Removing a mirror
@@ -410,6 +416,11 @@ mesh's fields; both are refused, `meta.ErrMeshSnapshot`) with the users, groups,
 open invites and sessions after the secrets; the leader refuses the ops and an
 actor-carrying command with `ErrCodec` while a live member reads an older codec
 (`meta.CodecUsers`), and enforcement waits for the first user.
+Codec 15 is the snapshot heal (16 §5, I-391, I-393): op 33 `SnapshotHeal{ID, Missing,
+Now}`, refused with `ErrCodec` while a live member reads codec 14 or older
+(`meta.CodecHeal`); the mirror's host proposes none before then. The snapshot frame is
+unchanged: a heal changes only a row's `Missing` and `State`, fields frame 7 already
+carries. Under a codec-14 header (an actor or `System`) the inner body keeps version 15.
 
 **`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
 hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are

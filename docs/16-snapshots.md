@@ -148,7 +148,8 @@ the recovery path when the cluster itself is gone.
 4. A chunk the reader cannot decode (fewer than `k` live slots) is not a failure: its hash
    stays in the tree, it goes into the manifest's `missing` list and the row ends
    `incomplete`; the next sync to that mirror tries it again, since it still lacks the
-   object. Every other byte of the snapshot is exact.
+   object, and the host heals the snapshot itself as soon as the chunk can be had (§5,
+   I-391). Every other byte of the snapshot is exact.
 5. The worker proposes `SnapshotEnd{ID, OK, Root, Files, Bytes, NewBytes, Missing, Now}`:
    with `OK` the row becomes `complete` (or `incomplete` with the count), and its root,
    sizes and missing count are recorded. Without `OK` (the mirror went offline, the disk
@@ -246,6 +247,27 @@ the mirror (I-243): what a cut sync left is no manifest's, and a sweep at the ne
 would take what its retry is about to skip (until 2026-10-13 every tick swept, so a
 restart mid-sync threw the copied part away and the retry began from nothing). An offline mirror keeps its
 `Deleting` rows until it returns.
+
+**Healing.** An incomplete snapshot is not left so: on each tick of an online mirror, and
+while no sync writes to it, its host takes every `incomplete` row of that mirror and each
+chunk in its manifest's `missing` list. A chunk the mirror now holds as an object (a later
+sync wrote it, since objects are shared by hash) leaves the list; any other is read from
+the pool through the ordinary reader, verified against its hash and written as an object,
+and leaves it too; one still unreadable stays. When the list shrank, the host rewrites the
+manifest with what remains (a durable replace, the manifest keeping its ID, name and
+root) and then proposes `SnapshotHeal{ID, Missing, Now}` (op 33, codec 15): the row's
+missing count falls to the manifest's, and a row whose count reaches zero is `complete`.
+A heal that only raises the count, names a row that is not complete or incomplete, or
+comes while a live member reads codec 14 or older is refused, so the count only ever
+falls and every node holds the same row; the host proposes none until every live member
+reads codec 15 (`meta.CodecHeal`). A chunk the pool has since collected stays missing for
+good: that snapshot keeps its gap, and its `N missing` says so truthfully (I-391).
+
+Only the newest finished snapshot of a mirror warns: `status`, `check` and the mirror's
+card say `incomplete` while that one is incomplete, and an older incomplete snapshot is
+shown with its `N missing` in the table, not as a warning on the mirror (I-392). A later
+complete snapshot holds everything the volume had then; a gap in an older one is history
+the volume no longer has, which no action fixes.
 
 A manifest on the disk with **no** row at all is never lost: it is a snapshot the
 catalogue forgot (the mirror was removed with `mirror remove` and added back, the disk was
@@ -490,6 +512,19 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
   than 20 finished jobs, whenever it lists them; the browser's status carries a done or
   cancelled job only within `RestoreShown` of its end, and every failed or unfinished job
   the host lists.
+- **I-391** — A snapshot's missing count only falls: the mirror's host removes a chunk from
+  an incomplete manifest's `missing` list only once the mirror holds it as an object that
+  matches its hash, rewrites the manifest before it proposes `SnapshotHeal`, and the FSM
+  applies a heal only to a complete or incomplete row and only to lower its count, the row
+  becoming `complete` at zero; a heal is proposed only while every live member reads
+  codec 15 and is refused with `ErrCodec` otherwise; and a heal never runs while a sync
+  writes to the mirror.
+- **I-392** — A mirror warns `incomplete` (`status`, `check`, the dashboard's card) exactly
+  while its newest complete or incomplete snapshot is incomplete.
+- **I-393** — Log entries carry codec version 15 only for `SnapshotHeal`; every entry of an
+  older version decodes as before; a codec-15 entry under a codec-14 header (an actor or
+  `System`) keeps its inner version; and `DecodeCommand(EncodeCommand(c)) == c` for every
+  heal.
 - **I-239** — A sync reads and writes up to `SyncWorkers` chunks at once, each distinct
   chunk once, and writes the same snapshot as one chunk at a time would: every object
   durable before any tree naming it, every tree before its parent, the manifest last,
@@ -517,6 +552,9 @@ stub in `test/invariants/` meanwhile.
 | I-365 | `TestRestoreJob_ProgressAddsUpToTotals`, `TestRestoreJob_ProgressMonotone_SameOnEveryNode`, `TestStatus_RestoreLine`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
 | I-366 | `TestRestoreJob_ParallelEqualsSerial`, `TestRestoreJob_OneJobPerHost_Queued`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
 | I-390 | `TestRestoreJob_FinishedPrunedWhenListed`, `TestStatus_FinishedRestoresLeaveTheDashboard` |
+| I-391 | `TestFSM_SnapshotHeal_Table`, `TestMirror_Heal_FromObjectsAndPool`, `TestMirrors_HealsIncompleteSnapshot`, `TestMirrors_NoHealBeforeCodec15` |
+| I-392 | `TestMirrors_WarnsOnlyForNewestIncomplete`, `TestWebUI_MirrorWarnsOnlyForNewestIncomplete` |
+| I-393 | `TestCodec_SnapshotHeal_Version15` |
 | I-372 | `TestRestoreJob_YieldsToClients`, `TestClients_BusyWindow`, `TestRestoreJob_YieldingInStatus` |
 | I-367 | `TestRestoreJob_RunsAsStarter_RecheckedOnResume`, `TestAdminOps_RestoreUnderUsers` |
 | I-368 | `TestRestoreJob_Cancel_NoTempLeft`, `TestRestoreJob_CancelByStarterOrAdmin`, `TestSoak_AllPhasesAgainstHarness` (phase 32), `TestSoak_AllPhasesUnderUsersAgainstHarness` (phase 32, another user's cancel) |

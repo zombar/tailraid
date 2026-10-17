@@ -16,6 +16,8 @@ The mirror is named after its device, `pike/m1`, `pike/m2` and so on. The device
 
 Unplug the disk whenever you like. A mirror that comes back after missing a scheduled snapshot gets one on its next minute, and the snapshots it missed are simply not taken; nothing is held in the pool for it while it is away. A disk moved to another device keeps its name and history: `mirror add` the same path on the new device.
 
+A snapshot taken while part of the volume could not be read (a device down mid-sync) is marked incomplete, with every other byte exact. It fills itself in on its own once those chunks can be read again, and the dashboard and `check` warn only while a mirror's newest snapshot is incomplete. A gap in an older snapshot whose chunks the volume has since deleted stays, shown as "N missing" in the snapshot list.
+
 ## The schedule
 
 | Kept | By default |
