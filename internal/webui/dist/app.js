@@ -2127,7 +2127,10 @@ var Player = class {
   }
   buildBar() {
     const cover = h("img", { class: "cover", alt: "" });
-    cover.addEventListener("error", () => cover.removeAttribute("src"));
+    cover.addEventListener("error", () => {
+      cover.dataset.failed = cover.getAttribute("src") ?? "";
+      cover.removeAttribute("src");
+    });
     const title = h("div", { class: "title" });
     const sub = h("div", { class: "sub" });
     const prev = iconBtn("skip_previous_fill", "previous", () => this.prev());
@@ -2140,6 +2143,8 @@ var Player = class {
     repeat.setAttribute("aria-pressed", "false");
     const shuffle = iconBtn("shuffle", "shuffle", () => this.toggleShuffle());
     shuffle.setAttribute("aria-pressed", "false");
+    const close = iconBtn("close", "close the player", () => this.clear());
+    close.classList.add("close");
     const queueBtn = h("button", { type: "button", class: "queue-btn", "aria-pressed": "false", onClick: () => {
       this.bar?.classList.toggle("expanded");
       this.notify();
@@ -2152,7 +2157,8 @@ var Player = class {
       h("div", { class: "transport" }, prev, playBtn, next2),
       h("div", { class: "seek" }, seek, time),
       h("div", { class: "modes" }, repeat, shuffle),
-      queueBtn
+      queueBtn,
+      close
     );
     const list = h("ol");
     const summary = h("span", { class: "small dim" });
@@ -2174,7 +2180,8 @@ var Player = class {
     if (!c) return;
     const e = this.els;
     const cover = e.cover;
-    const want = c.hasCover === false ? "" : thumbURL(c.path, c.root);
+    let want = c.hasCover === false ? "" : thumbURL(c.path, c.root);
+    if (want && cover.dataset.failed === want) want = "";
     if (cover.getAttribute("src") !== want) {
       if (want) cover.src = want;
       else cover.removeAttribute("src");

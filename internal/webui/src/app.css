@@ -481,7 +481,7 @@ table.tracks tr:hover { cursor: pointer; }
    expanded: cover · titles · transport · seek · modes · queue on one row;
    medium:   cover · titles · transport · modes · queue, then the seek bar;
    compact:  cover · titles · transport, then the seek bar · modes · queue */
-aside.nowbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; display: grid; grid-template-columns: 48px minmax(0, 1fr) auto minmax(160px, 2fr) auto auto; grid-template-areas: "cover titles transport seek modes queue"; column-gap: var(--sp-3); row-gap: var(--sp-1); align-items: center; align-content: center; height: calc(var(--nowbar-h) + env(safe-area-inset-bottom, 0px)); padding: 0 var(--gutter) env(safe-area-inset-bottom, 0px); background: var(--surface); border-top: 1px solid var(--line); }
+aside.nowbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; display: grid; grid-template-columns: 48px minmax(0, 1fr) auto minmax(160px, 2fr) auto auto auto; grid-template-areas: "cover titles transport seek modes queue close"; column-gap: var(--sp-3); row-gap: var(--sp-1); align-items: center; align-content: center; height: calc(var(--nowbar-h) + env(safe-area-inset-bottom, 0px)); padding: 0 var(--gutter) env(safe-area-inset-bottom, 0px); background: var(--surface); border-top: 1px solid var(--line); }
 .nowbar .cover { grid-area: cover; width: 48px; height: 48px; object-fit: cover; border-radius: 4px; background: var(--line); }
 .nowbar .titles { grid-area: titles; display: grid; min-width: 0; }
 .nowbar .title { font: 600 14px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -489,6 +489,7 @@ aside.nowbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; displa
 .nowbar .transport { grid-area: transport; display: flex; gap: var(--sp-1); }
 .nowbar .transport button, .nowbar .modes button { padding: 0 var(--sp-3); }
 .nowbar .queue-btn { grid-area: queue; padding: 0 var(--sp-3); }
+.nowbar .close { grid-area: close; padding: 0 var(--sp-3); }
 .nowbar .seek { grid-area: seek; display: grid; grid-template-columns: 1fr auto; gap: var(--sp-2); align-items: center; min-width: 0; }
 .nowbar .seek input[type=range] { width: 100%; margin: 0; accent-color: var(--accent); }
 .nowbar .time { font: 12px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -504,14 +505,14 @@ aside.nowbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; displa
 .queue li.qrow .dur { font: 12px var(--mono); color: var(--dim); text-align: right; }
 .queue li.qrow button { padding: 0 var(--sp-2); font-size: 12px; }
 .queue li.playing .title { color: var(--accent); }
-@media (pointer: fine) { .nowbar .transport button, .nowbar .modes button, .nowbar .queue-btn { min-height: 40px; } .queue li.qrow button { min-height: 32px; } .queue li.qrow { min-height: 40px; } }
+@media (pointer: fine) { .nowbar .transport button, .nowbar .modes button, .nowbar .queue-btn, .nowbar .close { min-height: 40px; } .queue li.qrow button { min-height: 32px; } .queue li.qrow { min-height: 40px; } }
 body:has(aside.nowbar:not([hidden])) main { padding-bottom: calc(var(--nowbar-h) + var(--sp-6)); }
 body:has(aside.nowbar:not([hidden])) .selbar, body:has(aside.nowbar:not([hidden])) #toasts { bottom: calc(var(--nowbar-h) + var(--sp-4) + env(safe-area-inset-bottom, 0px)); }
 @media (max-width: 839px) {
-  aside.nowbar { grid-template-columns: 48px minmax(0, 1fr) auto auto auto; grid-template-areas: "cover titles transport modes queue" "seek seek seek seek seek"; }
+  aside.nowbar { grid-template-columns: 48px minmax(0, 1fr) auto auto auto auto; grid-template-areas: "cover titles transport modes queue close" "seek seek seek seek seek seek"; }
 }
 @media (max-width: 599px) {
-  aside.nowbar { grid-template-columns: 40px minmax(0, 1fr) auto auto; grid-template-areas: "cover titles transport transport" "seek seek modes queue"; column-gap: var(--sp-2); }
+  aside.nowbar { grid-template-columns: 40px minmax(0, 1fr) auto auto auto; grid-template-areas: "cover titles transport transport close" "seek seek modes queue queue"; column-gap: var(--sp-2); }
   .nowbar .cover { width: 40px; height: 40px; }
   .queue li.qrow { grid-template-columns: 36px minmax(0, 1fr) 56px auto; }
   .queue li.qrow .artist { display: none; }
