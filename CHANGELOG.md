@@ -2,6 +2,17 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.10.5 (2026-10-17)
+
+### Changes
+
+- scrape, node, cli: "no match" is remembered, titles keep short words and numerals, albums tie on year, dump regions map (I-394, I-395) ([46453d4](https://github.com/zombar/tailraid/commit/46453d4))
+- meta, mirror, node, webui: an incomplete snapshot heals itself, and only a mirror's newest snapshot warns (I-391..I-393) ([6b2b5bd](https://github.com/zombar/tailraid/commit/6b2b5bd))
+- webui: Media tab posters fetch their thumbnails as listing tiles do, so box art not yet made still shows ([342d0fc](https://github.com/zombar/tailraid/commit/342d0fc))
+- webui: the now-playing bar fetches its cover as the tiles do, and asks for it whatever has_cover says ([57d5da3](https://github.com/zombar/tailraid/commit/57d5da3))
+- restore, webui: finished restore jobs age out when listed, and the dashboard shows a done or cancelled one for an hour (I-390) ([e3c816a](https://github.com/zombar/tailraid/commit/e3c816a))
+- soak: phase 11 runs repair until the home gate shuts before it checks the corpus's data slots (I-77) ([8d71e5b](https://github.com/zombar/tailraid/commit/8d71e5b))
+
 ## v0.10.4 (2026-10-17)
 
 ### Changes
