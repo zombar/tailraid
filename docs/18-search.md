@@ -327,7 +327,7 @@ reason.
 
 | Command | Does |
 |---|---|
-| `tailraid media scrape [path…]` | every library folder when no path is given, else the items under the paths; `--only movies,tv,episodes,music,games` (all by default), `--lang` (TMDB language, default `en-US`), `--region` (certification country, default `US`), `--yes`, `--dry-run`, `--id tmdb:<n>`, `--id mbid:<uuid>` or `--id libretro:<name>` for a single item path; its TMDB key (a v3 key, or a v4 read token) is the secret `tmdb` (`tailraid secret set tmdb`, docs/19 §6), checked with one `GET /3/configuration` before a run that needs it; with no key it does the keyless groups (`music`, `games`) and says it skipped the rest |
+| `tailraid media scrape [path…]` | every library folder when no path is given, else the items under the paths; `--only movies,tv,episodes,music,games` (all by default), `--lang` (TMDB language, default `en-US`), `--region` (certification country, default `US`), `--yes`, `--dry-run`, `--id tmdb:<n>`, `--id mbid:<uuid>` or `--id libretro:<name>` for a single item path, `--again` (ask again about the items answered "no match"); its TMDB key (a v3 key, or a v4 read token) is the secret `tmdb` (`tailraid secret set tmdb`, docs/19 §6), checked with one `GET /3/configuration` before a run that needs it; with no key it does the keyless groups (`music`, `games`) and says it skipped the rest |
 
 **The plan.** `scrape_plan` answers, for each item under the paths in catalogue order,
 its path, kind, the analysed title and year (§8a), its seasons and episode files with
@@ -352,18 +352,31 @@ PNG), re-encoded never. A game is planned only on a platform whose libretro syst
 platform table names (§8b; not the Switch); its facts and description stay with a
 `gamelist.xml`, which a scrape never writes.
 
-**Matching** (I-301). The query is the analysed title, with the year when the name has
+**Matching** (I-301, I-395). The query is the analysed title, with the year when the name has
 one. Titles compare after the tokenizer of §3 (NFKC, case-folded, punctuation as
-spaces). A result is a **clear match** when it is the only result whose title or
+spaces), keeping every word however short (the index drops one-letter words; a match
+cannot: `Tekken 6` is not `Tekken 5`), with a Roman numeral from II to XX read as its
+number (`Final Fantasy VII` is `Final Fantasy 7`). A result is a **clear match** when it is the only result whose title or
 original title equals the query's and, when the query has a year, whose year (a film's
 release year, a show's first air year) equals it too; an album's clear match is the only
-release group whose artist and title both equal the tags'. A game's box art is the set's name equal to
+release group whose artist and title both equal the tags', and of several (an artist's
+self-titled albums) the only one whose first release year is the tags' year. A game's box art is the set's name equal to
 the file's own (a disc set's folder name) with each of ``&*/:`<>?\|`` as `_`, as libretro files
 them; else the only name whose title (before its first tag) equals the game's analysed
-title or the file's own; else the only one of those tagged with one of the game's regions.
+title or the file's own; else the only one of those tagged with one of the game's regions, a short region
+tag read as the set's word for it (`EU` Europe, `US` USA, `JP` Japan, `AU` Australia and
+the rest of the table in `scrape.regionNames`), since a PSP or other disc dump is named
+`Tekken 6 (EU)` while the set files `Tekken 6 (Europe)`.
 The set's names come from its index page, fetched once per system a run. A clear match is used
 without asking. Otherwise, on a terminal the CLI lists the top five (title, year, the
-first line of the overview) and takes a number, `s` to skip or an id; without a
+first line of the overview) and takes a number, `s` to skip this run, `n` for no match
+or an id. A **no match** is remembered (I-394): the CLI sends the admin op
+`scrape_skip` (the item's path and inode, needing Write there as a sidecar does) to its
+node, which creates `/.tailraid/scrape/skips/<kind>-<inode>` as the node, and every
+node's `scrape_plan` leaves out an item with such a marker unless asked with `--again`
+(`All`), so the same question is not asked on every run and from every device; a
+renamed item keeps its answer, one deleted and made again is asked anew. An `s`, a run
+without a terminal and `--yes` remember nothing; without a
 terminal the item is skipped and listed in the summary; `--yes` takes the top result.
 `--id` names the item's id outright. A show's match carries its seasons and episodes
 (one request per season), matched by number; an episode TMDB does not list is skipped.
@@ -414,6 +427,14 @@ the Cover Art Archive data are CC0 and need none.
   without asking; any other result is
   taken only by the user's choice, `--yes` or `--id`, and without a terminal the item is
   skipped and reported; the same answers give the same matches.
+- **I-394** — An item answered "no match" is left out of every node's `scrape_plan` until
+  asked with `--again`, and only an explicit `n` records it (never an `s`, a run without a
+  terminal or `--yes`); the marker is keyed by the item's kind and inode and written only
+  by the node, under `/.tailraid/scrape/skips`, after the caller's Write on the item was
+  checked.
+- **I-395** — Titles compare with every word kept and II..XX read as 2..20, the same on
+  both sides; of several equal album titles the one whose year is the tags' is clear;
+  a game's short region tags are read as the set's region words.
 - **I-302** — The TMDB key lives in the secrets store as `tmdb` (sealed, docs/19, set
   only by `secret set`) and in no file, travels in plaintext only to
   `api.themoviedb.org` and from a node to its own CLI, and never appears in a log line,
@@ -496,6 +517,8 @@ the Cover Art Archive data are CC0 and need none.
 | I-299 | `TestScrapePlan_Slots`, `TestScrapePlan_SameOnEveryNode`, `TestPlanPage_Sizes_Table`, `TestPlanPage_Under`, `TestRun_WritesMissingSlotsOnly`, `TestWebWriter_ExclusiveCreate`, `TestCLI_ScrapeWriter_SignsIn` |
 | I-300 | `TestNFO_RoundTrip_Table`, `TestScrapePlan_Slots` |
 | I-301 | `TestClear_Table`, `TestClearAlbum_Table`, `TestClearGame_Table`, `TestRun_UnclearMatch_Table` |
+| I-394 | `TestRun_NoMatchRemembered`, `TestScrapePlan_LeavesOutRememberedNoMatch`, `TestScrapeSkip_NeedsWriteAndIsTheNodes` |
+| I-395 | `TestNorm_ShortWordsAndNumerals`, `TestClearAlbum_SelfTitledByYear`, `TestClearGame_ShortRegionTags` |
 | I-302 | `TestClient_KeyOnlyToTMDB_UserAgent_Redacted`, `TestClient_ProviderHostsOnly`, `TestClient_429Retries_BoundedBody`, `TestClient_MusicBrainzOncePerSecond` |
 | I-206 | `TestSegment_RoundTrip_TrailerRejectsTruncation`, `TestSegment_SizeBoundaries_Table`, `FuzzSegmentDecode`, `TestIndexer_LoserOfCreateRaceAborts`, `TestIndexer_NoChangeWritesNothing`, `TestIndexer_RebuildWhenChainExceedsEight`, `TestSweep_RemovesOrphansOlderThanHour`, `TestSearch_ReloadsOnNewSegment`, `TestCluster_SearchDeterministicAcrossNodes`, `TestIndexer_LeaderChange_ContinuesFromChain`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-207 | `TestTokenize_Table`, `FuzzTokenize`, `TestIndexer_SortedWalk_SegmentBytesDeterministic`, `TestIndexer_ReindexOnlyWhenChunksChange`, `TestIndexer_SkipsTrashReservedEphemeral`, `TestIndexer_MaxFile_Table`, `TestIndexer_AudioFirstChunkOnly`, `TestIndexer_MaxBytes_TagsOnly`, `TestConfig_SearchKeys_Table`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |

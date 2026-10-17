@@ -37,6 +37,7 @@ func mediaCmd() *cobra.Command {
 func mediaScrapeCmd() *cobra.Command {
 	var o scrape.Options
 	var only []string
+	var again bool
 	c := &cobra.Command{
 		Use:   "scrape [path]...",
 		Short: "Write the missing .nfo sidecars, posters, backdrops, stills and covers of the libraries",
@@ -46,7 +47,8 @@ MusicBrainz and the Cover Art Archive (album covers) or the libretro thumbnails 
 of a game, by its No-Intro name), and writes only what is missing,
 under the names the Media tab reads. Nothing that exists is replaced, renamed or
 deleted. A clear match (title and year agree) is used at once; any other is listed for
-you to choose on a terminal, skipped without one, or taken with --yes. Only this
+you to choose on a terminal, skipped without one, or taken with --yes. Answering n (no
+match) remembers it in the volume, so no later run asks again until --again. Only this
 command contacts a provider: no node ever does (docs/18 §11).
 
 ` + scrape.Attribution,
@@ -94,7 +96,7 @@ command contacts a provider: no node ever does (docs/18 §11).
 			if err != nil {
 				return fmt.Errorf("scrape writes through the node's web listener: %w", err)
 			}
-			items, err := scrapePlan(cmd, args)
+			items, err := scrapePlan(cmd, args, again)
 			if err != nil {
 				return err
 			}
@@ -107,6 +109,10 @@ command contacts a provider: no node ever does (docs/18 §11).
 			var ch scrape.Chooser
 			if isTerminal(os.Stdin) {
 				ch = &ttyChooser{in: bufio.NewReader(cmd.InOrStdin()), out: cmd.ErrOrStderr()}
+			}
+			o.Remember = func(_ context.Context, it search.ScrapeItem) error { // I-394
+				_, err := adminCall(cmd, rpc.AdminOp{Op: "scrape_skip", Path: it.Dir, Kind: it.Kind, Ino: it.Ino})
+				return err
 			}
 			w := &webWriter{base: strings.TrimSuffix(base, "/"), http: &http.Client{Timeout: 2 * time.Minute}}
 			if rep.Users != nil && rep.Users.Count > 0 {
@@ -144,19 +150,20 @@ command contacts a provider: no node ever does (docs/18 §11).
 	c.Flags().StringVar(&o.Region, "region", "US", "the certification country")
 	c.Flags().BoolVar(&o.Yes, "yes", false, "take the top result when a search has no clear match")
 	c.Flags().BoolVar(&o.DryRun, "dry-run", false, "print what would be written, write nothing")
+	c.Flags().BoolVar(&again, "again", false, "also ask about the items answered n (no match) before")
 	c.Flags().StringVar(&o.ID, "id", "", "the provider id of the one item the path names: tmdb:<n>, mbid:<uuid> or libretro:<name>")
 	addNodeFlags(c)
 	return c
 }
 
 // scrapePlan asks this node for the plan under each path, a page at a time, each item once.
-func scrapePlan(cmd *cobra.Command, paths []string) ([]search.ScrapeItem, error) {
+func scrapePlan(cmd *cobra.Command, paths []string, again bool) ([]search.ScrapeItem, error) {
 	var out []search.ScrapeItem
 	seen := map[uint64]bool{}
 	for _, p := range paths {
 		cursor := ""
 		for {
-			raw, err := localCall(cmd, rpc.AdminOp{Op: "scrape_plan", Path: p, Cursor: cursor})
+			raw, err := localCall(cmd, rpc.AdminOp{Op: "scrape_plan", Path: p, Cursor: cursor, All: again})
 			if err != nil {
 				return nil, err
 			}
@@ -279,13 +286,13 @@ func escapePath(p string) string {
 	return strings.Join(parts, "/")
 }
 
-// ttyChooser lists the top results and reads a number, s or an id.
+// ttyChooser lists the top results and reads a number, s, n or an id.
 type ttyChooser struct {
 	in  *bufio.Reader
 	out io.Writer
 }
 
-func (t *ttyChooser) Choose(it search.ScrapeItem, cs []scrape.Candidate) (int, string, bool) {
+func (t *ttyChooser) Choose(it search.ScrapeItem, cs []scrape.Candidate) scrape.Choice {
 	fmt.Fprintf(t.out, "\n%s: %q", it.Dir, it.Title)
 	if it.Year != 0 {
 		fmt.Fprintf(t.out, " (%d)", it.Year)
@@ -307,16 +314,19 @@ func (t *ttyChooser) Choose(it search.ScrapeItem, cs []scrape.Candidate) (int, s
 		}
 		fmt.Fprintf(t.out, "  %d) %s\n", i+1, line)
 	}
-	fmt.Fprint(t.out, "number, s to skip, or an id: ")
+	fmt.Fprint(t.out, "number, s to skip this time, n for no match (not asked again), or an id: ")
 	line, _ := t.in.ReadString('\n')
 	line = strings.TrimSpace(line)
 	if n, err := strconv.Atoi(line); err == nil && n >= 1 && n <= len(cs) {
-		return n - 1, "", false
+		return scrape.Choice{Pick: n - 1}
 	}
-	if line == "" || line == "s" {
-		return -1, "", true
+	switch line {
+	case "", "s":
+		return scrape.Choice{Pick: -1, Skip: true}
+	case "n":
+		return scrape.Choice{Pick: -1, Never: true}
 	}
-	return -1, line, false
+	return scrape.Choice{Pick: -1, ID: line}
 }
 
 // isTerminal reports whether f is a character device: a person at a terminal.

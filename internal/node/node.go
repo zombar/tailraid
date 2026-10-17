@@ -1131,6 +1131,8 @@ func (a *adminOps) dispatch(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return a.userOp(ctx, op)
 	case "scrape_plan": // this node's plan for media scrape (docs/18 §11): never forwarded
 		return a.scrapePlan(ctx, op)
+	case "scrape_skip": // an item answered "no match", remembered in the volume (docs/18 §11, I-394)
+		return a.scrapeSkip(ctx, op)
 	case "search": // this node's index (docs/18 §6): never forwarded
 		return a.search.Search(ctx, op.Query, op.Path, op.Limit), nil
 	case "stats_seal": // this node's partial stats hour and any rollup still missing (docs/17 §7)

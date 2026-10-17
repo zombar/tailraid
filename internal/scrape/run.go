@@ -19,10 +19,19 @@ type Writer interface {
 	Create(ctx context.Context, path string, data []byte) error
 }
 
-// Chooser asks the user to pick among candidates that are not a clear match: the index
-// taken, or an id typed in, or skip. A nil Chooser is no terminal: the item is skipped.
+// Chooser asks the user to pick among candidates that are not a clear match. A nil
+// Chooser is no terminal: the item is skipped.
 type Chooser interface {
-	Choose(it search.ScrapeItem, cs []Candidate) (pick int, id string, skip bool)
+	Choose(it search.ScrapeItem, cs []Candidate) Choice
+}
+
+// Choice is the user's answer: the index taken, or an id typed in, or skip this run, or
+// no match at all, which Options.Remember records so it is not asked again (I-394).
+type Choice struct {
+	Pick  int
+	ID    string
+	Skip  bool
+	Never bool
 }
 
 // The --only groups.
@@ -43,6 +52,9 @@ type Options struct {
 	DryRun bool   // write nothing, print what would be written
 	ID     string // the id of the one film, show, album or game the paths name (tmdb:<n>, mbid:<uuid> or libretro:<name>)
 	Out    io.Writer
+	// Remember records an item the user answered "no match" for, so no plan lists it
+	// again until --again (I-394); nil records nothing.
+	Remember func(ctx context.Context, it search.ScrapeItem) error
 }
 
 // Skip is an item a run left alone, and why.
@@ -176,7 +188,7 @@ func itemPath(it search.ScrapeItem) string {
 
 // pick resolves an item to one candidate's id: --id, a clear match, --yes, the chooser,
 // or "" with the reason it was skipped.
-func (r *runner) pick(it search.ScrapeItem, scheme string, cs []Candidate, isClear func() (int, bool)) (string, string) {
+func (r *runner) pick(ctx context.Context, it search.ScrapeItem, scheme string, cs []Candidate, isClear func() (int, bool)) (string, string) {
 	if r.o.ID != "" {
 		if id, ok := strings.CutPrefix(r.o.ID, scheme+":"); ok {
 			return id, ""
@@ -196,14 +208,22 @@ func (r *runner) pick(it search.ScrapeItem, scheme string, cs []Candidate, isCle
 		return "", fmt.Sprintf("no clear match among %d results (run in a terminal to choose, or pass --yes or --id)", len(cs))
 	}
 	top := cs[:min(5, len(cs))]
-	i, id, skip := r.ch.Choose(it, top)
+	ans := r.ch.Choose(it, top)
 	switch {
-	case skip:
+	case ans.Never:
+		if r.o.Remember == nil || r.o.DryRun {
+			return "", "no match"
+		}
+		if err := r.o.Remember(ctx, it); err != nil {
+			return "", "no match (not remembered: " + err.Error() + ")"
+		}
+		return "", "no match (remembered)"
+	case ans.Skip:
 		return "", "skipped"
-	case id != "":
-		return id, ""
-	case i >= 0 && i < len(top):
-		return top[i].ID, ""
+	case ans.ID != "":
+		return ans.ID, ""
+	case ans.Pick >= 0 && ans.Pick < len(top):
+		return top[ans.Pick].ID, ""
 	}
 	return "", "skipped"
 }
@@ -223,7 +243,7 @@ func (r *runner) movie(ctx context.Context, it search.ScrapeItem) error {
 	if err != nil {
 		return err
 	}
-	id, why := r.pick(it, "tmdb", cs, func() (int, bool) { return Clear(it.Title, it.Year, cs) })
+	id, why := r.pick(ctx, it, "tmdb", cs, func() (int, bool) { return Clear(it.Title, it.Year, cs) })
 	if id == "" {
 		r.skip(it, why)
 		return nil
@@ -244,7 +264,7 @@ func (r *runner) show(ctx context.Context, it search.ScrapeItem) error {
 	if err != nil {
 		return err
 	}
-	id, why := r.pick(it, "tmdb", cs, func() (int, bool) { return Clear(it.Title, it.Year, cs) })
+	id, why := r.pick(ctx, it, "tmdb", cs, func() (int, bool) { return Clear(it.Title, it.Year, cs) })
 	if id == "" {
 		r.skip(it, why)
 		return nil
@@ -311,7 +331,7 @@ func (r *runner) album(ctx context.Context, it search.ScrapeItem) error {
 	if err != nil {
 		return err
 	}
-	id, why := r.pick(it, "mbid", cs, func() (int, bool) { return ClearAlbum(it.Artist, it.Title, cs) })
+	id, why := r.pick(ctx, it, "mbid", cs, func() (int, bool) { return ClearAlbum(it.Artist, it.Title, it.Year, cs) })
 	if id == "" {
 		r.skip(it, why)
 		return nil
@@ -329,7 +349,7 @@ func (r *runner) game(ctx context.Context, it search.ScrapeItem) error {
 		r.boxarts[it.System] = names
 	}
 	cs, idx, isClear := ClearGame(it.Key, it.Title, it.Regions, names)
-	name, why := r.pick(it, "libretro", cs, func() (int, bool) { return idx, isClear })
+	name, why := r.pick(ctx, it, "libretro", cs, func() (int, bool) { return idx, isClear })
 	if name == "" {
 		r.skip(it, why)
 		return nil

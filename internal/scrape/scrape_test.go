@@ -195,7 +195,7 @@ func TestClearAlbum_Table(t *testing.T) {
 	}{
 		{"Deftones", "Around the Fur", 0}, {"deftones", "around the fur", 0}, {"", "Around the Fur", -1}, {"Deftones", "White Pony", -1},
 	} {
-		if i, _ := ClearAlbum(tc.artist, tc.title, cs); i != tc.want {
+		if i, _ := ClearAlbum(tc.artist, tc.title, 0, cs); i != tc.want {
 			t.Errorf("ClearAlbum(%q, %q) = %d, want %d", tc.artist, tc.title, i, tc.want)
 		}
 	}
@@ -460,9 +460,9 @@ type pickChooser struct {
 	asked int
 }
 
-func (c *pickChooser) Choose(search.ScrapeItem, []Candidate) (int, string, bool) {
+func (c *pickChooser) Choose(search.ScrapeItem, []Candidate) Choice {
 	c.asked++
-	return c.pick, "", false
+	return Choice{Pick: c.pick}
 }
 
 func plan() []search.ScrapeItem {
