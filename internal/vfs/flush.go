@@ -92,6 +92,9 @@ type Flusher struct {
 	peak    atomic.Int64
 
 	superseded atomic.Uint64 // rewrites dropped because another started later (I-223)
+	flushed    atomic.Uint64 // dirty bytes committed, cumulative (docs/04 §3, I-398)
+	rmu        sync.Mutex    // guards drain
+	drain      []drainSample // flushed over the last DrainWindow, oldest first
 	refused    atomic.Uint64 // flushes dropped because the FSM refused the writer's Commit (docs/21 §4)
 
 	mu      sync.Mutex
@@ -175,6 +178,49 @@ func (f *Flusher) CommitsRefused() uint64 { return f.refused.Load() }
 // the same file replaced, so their dirty data was dropped (docs/04 §6, I-223).
 func (f *Flusher) RewritesSuperseded() uint64 { return f.superseded.Load() }
 
+// DrainWindow is the span the drain rate is measured over (I-398).
+const DrainWindow = time.Minute
+
+// drainSample is the committed byte count at one moment.
+type drainSample struct {
+	at time.Time
+	n  uint64
+}
+
+// Flushed is the dirty bytes this gateway's flushes committed since start (I-398).
+func (f *Flusher) Flushed() uint64 { return f.flushed.Load() }
+
+// sampleDrain records the committed byte count every 2 s, keeping DrainWindow of them.
+func (f *Flusher) sampleDrain(now time.Time) {
+	f.rmu.Lock()
+	defer f.rmu.Unlock()
+	if n := len(f.drain); n > 0 && now.Sub(f.drain[n-1].at) < 2*time.Second {
+		return
+	}
+	f.drain = append(f.drain, drainSample{at: now, n: f.flushed.Load()})
+	i := 0
+	for i < len(f.drain)-1 && now.Sub(f.drain[i].at) > DrainWindow {
+		i++
+	}
+	f.drain = f.drain[i:]
+}
+
+// DrainRate is the bytes a second the flusher committed over the last DrainWindow, 0
+// until two samples exist (I-398).
+func (f *Flusher) DrainRate() uint64 {
+	f.rmu.Lock()
+	defer f.rmu.Unlock()
+	if len(f.drain) < 2 {
+		return 0
+	}
+	first, last := f.drain[0], f.drain[len(f.drain)-1]
+	secs := last.at.Sub(first.at).Seconds()
+	if secs <= 0 {
+		return 0
+	}
+	return uint64(float64(last.n-first.n) / secs)
+}
+
 func (f *Flusher) Buffers() (cur, peak uint64) {
 	return uint64(max(f.buffers.Load(), 0)), uint64(max(f.peak.Load(), 0))
 }
@@ -250,6 +296,7 @@ func (f *Flusher) Run(ctx context.Context) {
 		case <-timer.C():
 		}
 		now := f.clk.Now()
+		f.sampleDrain(now)
 		f.ov.PruneRewrites() // the claim table holds only the inodes written within RewriteHold
 		dirty := f.ov.Dirty()
 		// the threshold weighs what this loop can still flush: bytes in outstanding plans
@@ -267,9 +314,9 @@ func (f *Flusher) Run(ctx context.Context) {
 			switch {
 			case total >= f.cfg.TotalDirtyHi:
 				total -= d.DirtyBytes
-			case d.WALBytes >= f.ov.WALCap():
-				// a rewritten region keeps dirty bytes small while the WAL grows: flush
-				// the inode in full so the WAL compacts (docs/04 §3, L-186)
+			case d.WALBytes >= f.ov.WALCap() || f.ov.compactDue(d):
+				// a rewritten region keeps dirty bytes small while the log grows: flush
+				// the inode in full so the log compacts (docs/04 §3, L-186)
 			case d.DirtyBytes >= f.cfg.FileDirtyHi:
 				partial = true
 			case now.Sub(d.LastWrite) >= f.cfg.IdleFlush:
@@ -385,6 +432,7 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 	}
 	f.ov.NoteFlush(ino, nil) // before CommitFlushed, which may evict the entry
 	f.restoreTimes(ctx, ino)
+	f.flushed.Add(plan.Extents.bytes() - plan.Residual.bytes())
 	return f.ov.CommitFlushed(plan, newSize)
 }
 

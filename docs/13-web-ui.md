@@ -13,7 +13,7 @@ operation stays in the CLI.
 
 - **Dashboard**: the `admin.Report` of docs/02 and docs/06 (volume policy and usage, per-node
   capacity, slots and liveness, degraded / repair-pending / unreadable / stale-policy counts,
-  the repairer's last pass, the gateway's dirty bytes and WAL) polled every 5 s, plus a
+  the repairer's last pass, the gateway's staged bytes with their time to drain, docs/04 §3, and its WAL) polled every 5 s, plus a
   per-file drill-down from `admin.DescribeChunks`: each chunk's hash, (k,m), live slots and
   which node holds each shard. A **Disks** block under Volume draws the data spread
   across targets: each host a card with one row per disk, each row's slots against its

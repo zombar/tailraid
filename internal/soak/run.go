@@ -103,7 +103,9 @@ type Sample struct {
 	WALBytes      int64                      `json:"wal_bytes"`      // the sampled node's overlay WAL depth
 	DirtyBytes    uint64                     `json:"dirty_bytes"`
 	PlanBytes     uint64                     `json:"plan_bytes"`
-	FlushBytes    uint64                     `json:"flush_bytes"`  // the sampled node's flush buffers (docs/04 §9)
+	FlushBytes    uint64                     `json:"flush_bytes"` // the sampled node's flush buffers (docs/04 §9)
+	Staged        uint64                     `json:"staged"`      // the sampled node's staged bytes and drain rate (docs/04 §3)
+	DrainRate     uint64                     `json:"drain_rate"`
 	TrashInodes   int                        `json:"trash_inodes"` // deleted entries waiting in the trash (docs/06 §1)
 	TrashBytes    uint64                     `json:"trash_bytes"`
 	CachePinned   int64                      `json:"cache_pinned"`          // bytes the sampled node's cache holds for its pins (docs/13 §4)
@@ -562,6 +564,7 @@ func (r *Run) sample(ctx context.Context, round int) {
 		s.RepairBacklog = s.Degraded + s.StalePolicy
 		if rep.Gateway != nil {
 			s.WALBytes, s.DirtyBytes, s.PlanBytes, s.FlushBytes = rep.Gateway.WALBytes, rep.Gateway.DirtyBytes, rep.Gateway.PlanBytes, rep.Gateway.FlushBytes
+			s.Staged, s.DrainRate = rep.Gateway.Staged, rep.Gateway.DrainRate
 		}
 		if rep.Process != nil {
 			s.HeapInuse, s.Sys, s.Goroutines = rep.Process.HeapInuse, rep.Process.Sys, rep.Process.Goroutines

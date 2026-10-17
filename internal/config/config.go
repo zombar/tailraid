@@ -75,6 +75,10 @@ type Config struct {
 		Size   string `yaml:"size,omitempty"`   // the chunk cache's budget for unpinned bytes (default 1GiB, at least 64MiB; docs/12 §10)
 		System string `yaml:"system,omitempty"` // the system pin's budget for /.tailraid (default 1GiB, 0 off; I-373)
 	} `yaml:"cache,omitempty"`
+	// Staging is the gateway's stage of docs/04 §3: written only when set (I-61).
+	Staging struct {
+		Size string `yaml:"size,omitempty"` // bytes accepted ahead of the cluster (default a quarter of the staging disk's free space, at least 1GiB)
+	} `yaml:"staging,omitempty"`
 	// Mirrors is the snapshot schedule of docs/16 §4, run by each mirror's host.
 	Mirrors struct {
 		Every string `yaml:"every,omitempty"` // an automatic snapshot of every online mirror this often (default 1h; "0" none)
@@ -171,6 +175,22 @@ func (c Config) CacheSystem() (int64, error) {
 		return 0, fmt.Errorf("config: cache.system %q: want a size, or 0 to keep nothing", c.Cache.System)
 	}
 	return int64(n), nil //nolint:gosec // ParseBytes bounds it
+}
+
+// MinStagingSize is the smallest staging.size (docs/04 §3, I-396).
+const MinStagingSize = 1 << 30
+
+// StagingSize parses staging.size, the gateway's stage: 0 when empty (derived from the
+// staging disk's free space), otherwise at least 1 GiB (docs/04 §3, docs/12 §8, I-396).
+func (c Config) StagingSize() (uint64, error) {
+	if c.Staging.Size == "" {
+		return 0, nil
+	}
+	n, err := ParseBytes(c.Staging.Size)
+	if err != nil || n < MinStagingSize {
+		return 0, fmt.Errorf("config: staging.size %q: want a size of at least 1GiB", c.Staging.Size)
+	}
+	return n, nil
 }
 
 // Mirror is one disk given to snapshots (docs/16 §1).
@@ -726,6 +746,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if _, err := c.CacheSystem(); err != nil {
+		return err
+	}
+	if _, err := c.StagingSize(); err != nil {
 		return err
 	}
 	if _, err := c.CacheSize(); err != nil {

@@ -204,7 +204,15 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	defer cache.Drain() // the writes behind the last Puts (at most CacheQueue chunks, I-204)
 	vol := node.FSM.Volume()
-	ov, err := vfs.OpenOverlay(filepath.Join(cfg.Node.DataDir, "staging"), vol.ChunkSize, clk, vfs.WithLog(log))
+	stage, err := cfg.StagingSize()
+	if err != nil {
+		return err
+	}
+	ovOpts := []vfs.Option{vfs.WithLog(log)}
+	if stage > 0 {
+		ovOpts = append(ovOpts, vfs.WithMaxDirty(stage)) // staging.size; else from the disk (I-396)
+	}
+	ov, err := vfs.OpenOverlay(filepath.Join(cfg.Node.DataDir, "staging"), vol.ChunkSize, clk, ovOpts...)
 	if err != nil {
 		return err
 	}
@@ -378,7 +386,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return err
 	}
 	verifier := &users.Verifier{Users: node.FSM, Cluster: clusterID, NodeID: id, Skew: usersPol.ClockSkew, Now: clk.Now}
-	ops := &adminOps{cfg: cfg, paths: paths, bindings: bindings, node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
+	ops := &adminOps{cfg: cfg, paths: paths, gateway: func() *admin.GatewayReport { return admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov) }, bindings: bindings, node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	ops.secrets = store
 	ops.sessionLife = usersPol.Session
 	auditW := &audit.Writer{Vol: stats.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Node: cfg.Node.Name, Clk: clk, Log: log}
@@ -428,6 +436,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		rep := admin.Build(node, prober, clusterID, clk, repairer)
 		rep.WalkMS = time.Since(start).Milliseconds()
 		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd).WithFS(fs)
+		if w := admin.StagedWarning(rep.Gateway); w != "" {
+			rep.Warnings = append(rep.Warnings, w)
+		}
 		rep.Machine = admin.Vitals(cfg.Node.DataDir, ident.IP)
 		rep.Machine.Paths = paths.Report()
 		rep.Warnings = append(rep.Warnings, cfg.Warnings(cfg.Path)...)
@@ -744,6 +755,7 @@ type adminOps struct {
 	disks     *diskSet
 	client    *rpc.Client
 	rd        *vfs.Reader
+	gateway   func() *admin.GatewayReport // this node's overlay as status shows it (docs/12 §8)
 	ring      *meta.EventRing
 	fs        *vfs.FS
 	pins      *pins.Pins
@@ -1208,6 +1220,11 @@ func (a *adminOps) dispatch(ctx context.Context, op rpc.AdminOp) (any, error) {
 		rep.Warnings = append(rep.Warnings, a.userWarnings(ctx)...)        // dormant users, bindings to no one (docs/21 §8, I-358)
 		rep.Warnings = append(rep.Warnings, a.cfg.Warnings(a.cfg.Path)...) // this device's files on disk (docs/08, I-341)
 		rep.Warnings = append(rep.Warnings, admin.PathWarnings(a.paths.Report())...)
+		if a.gateway != nil {
+			if w := admin.StagedWarning(a.gateway()); w != "" {
+				rep.Warnings = append(rep.Warnings, w) // on this host's disk only (I-398)
+			}
+		}
 		return rep, nil
 	case "fsck":
 		snap, err := a.node.FSM.Snapshot()

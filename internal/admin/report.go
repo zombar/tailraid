@@ -131,11 +131,18 @@ func (s *SyncReport) Percent() int {
 // GatewayReport is this node's overlay: what is acknowledged but not yet committed, and
 // what the flusher holds for it (docs/04 §9, docs/12 §8, I-84).
 type GatewayReport struct {
-	DirtyInodes  int    `json:"dirty_inodes"`
-	DirtyBytes   uint64 `json:"dirty_bytes"` // bytes in extents not yet captured by a flush plan
-	PlanBytes    uint64 `json:"plan_bytes"`  // bytes in flushes under way
-	WALBytes     int64  `json:"wal_bytes"`   // Σ per-inode WAL file sizes
-	WALCap       uint64 `json:"wal_cap"`     // the per-inode WAL cap
+	DirtyInodes int    `json:"dirty_inodes"`
+	DirtyBytes  uint64 `json:"dirty_bytes"` // bytes in extents not yet captured by a flush plan
+	PlanBytes   uint64 `json:"plan_bytes"`  // bytes in flushes under way
+	WALBytes    int64  `json:"wal_bytes"`   // Σ per-inode WAL file sizes
+	WALCap      uint64 `json:"wal_cap"`     // the per-inode WAL cap
+	// the stage (docs/04 §3, I-398): bytes acknowledged here and not yet committed, on
+	// this host's disk only; how many it accepts ahead of the cluster; what the flusher
+	// committed since start and how fast over the last minute
+	Staged       uint64 `json:"staged"`
+	Stage        uint64 `json:"stage"`
+	FlushedBytes uint64 `json:"flushed_bytes"`
+	DrainRate    uint64 `json:"drain_rate"`
 	Flushing     int    `json:"flushing"`    // inodes with a flush plan outstanding
 	FlushBytes   uint64 `json:"flush_bytes"` // chunk and shard buffers the flusher holds right now
 	FlushPeak    uint64 `json:"flush_peak"`  // the most it has held since start
@@ -187,6 +194,7 @@ func GatewayFromDirty(infos []vfs.DirtyInfo) *GatewayReport {
 		if infos[i].Flushing {
 			g.Flushing++
 		}
+		g.Staged += infos[i].DirtyBytes + infos[i].PlanBytes
 		if infos[i].LastErr != "" && g.LastFlushErr == "" {
 			g.LastFlushErr = infos[i].LastErr
 		}
@@ -201,7 +209,48 @@ func (g *GatewayReport) WithFlusher(fl *vfs.Flusher, ov *vfs.Overlay) *GatewayRe
 	g.CommitsRefused = fl.CommitsRefused()
 	g.FlushCap = fl.BufferCap()
 	g.WALCap = uint64(max(ov.WALCap(), 0))
+	g.Stage = ov.Stage()
+	g.FlushedBytes, g.DrainRate = fl.Flushed(), fl.DrainRate()
 	return g
+}
+
+// StageWarnAt is the staged bytes above which status and check warn (docs/04 §3).
+const StageWarnAt = 1 << 30
+
+// StagedLine is the staged bytes with their time to drain at the measured rate, "" when
+// nothing is staged (docs/12 §8, I-398).
+func StagedLine(g *GatewayReport) string {
+	if g == nil || g.Staged == 0 {
+		return ""
+	}
+	line := iec(g.Staged) + " on this host only"
+	if g.DrainRate > 0 {
+		line += fmt.Sprintf(", draining %s/s, about %s", iec(g.DrainRate), drainETA(g.Staged, g.DrainRate))
+	}
+	return line
+}
+
+// drainETA is how long staged bytes take at rate bytes a second: seconds under a minute,
+// whole minutes after.
+func drainETA(staged, rate uint64) string {
+	secs := staged / rate
+	if secs < 60 {
+		return fmt.Sprintf("%d s", secs)
+	}
+	mins := (secs + 30) / 60
+	if mins < 60 {
+		return fmt.Sprintf("%d min", mins)
+	}
+	return fmt.Sprintf("%d h %d min", mins/60, mins%60)
+}
+
+// StagedWarning is the line status and check add while more than StageWarnAt bytes are
+// staged: acknowledged, but on this host's disk only (docs/04 §3, I-398).
+func StagedWarning(g *GatewayReport) string {
+	if g == nil || g.Staged <= StageWarnAt {
+		return ""
+	}
+	return "staged " + StagedLine(g) + ": acknowledged writes not yet spread to the cluster; losing this disk now loses them"
 }
 
 // ProcessReport is the Go runtime's view of this node's process (docs/12 §8, I-84).

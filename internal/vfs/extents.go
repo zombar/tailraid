@@ -24,6 +24,10 @@ func (e *extents) insert(x extent) {
 		return
 	}
 	old := *e
+	if n := len(old); n == 0 || old[n-1].end() <= x.off {
+		*e = append(*e, x) // past the last extent: a sequential WRITE appends in place (I-399)
+		return
+	}
 	i, j := old.span(x.off, x.n) // [i, j) overlaps x; old[:i] lies before, old[j:] after
 	out := make(extents, 0, len(old)+2)
 	out = append(out, old[:i]...)
@@ -151,5 +155,72 @@ func (e extents) without(idxs []uint64, cs uint64) extents {
 func (e extents) clone() extents {
 	out := make(extents, len(e))
 	copy(out, e)
+	return out
+}
+
+// fileRange is a byte range [start, end) of a file.
+type fileRange struct{ start, end uint64 }
+
+// minus is the byte ranges of e that r does not cover, adjacent ones merged: the part of
+// a plan a partial Commit made durable, given its residual (both sorted, r within e).
+func (e extents) minus(r extents) []fileRange {
+	var out []fileRange
+	add := func(start, end uint64) {
+		if end <= start {
+			return
+		}
+		if n := len(out); n > 0 && out[n-1].end == start {
+			out[n-1].end = end
+			return
+		}
+		out = append(out, fileRange{start, end})
+	}
+	j := 0
+	for _, x := range e {
+		cur := x.off
+		for j < len(r) && r[j].end() <= cur {
+			j++
+		}
+		for k := j; k < len(r) && r[k].off < x.end(); k++ {
+			add(cur, r[k].off)
+			cur = max(cur, r[k].end())
+		}
+		add(cur, x.end())
+	}
+	return out
+}
+
+// cleaned drops every piece of e whose bytes were logged below position w and lie inside
+// ranges (ascending, disjoint): what a clean record says a Commit made durable (docs/04
+// §2.1). Pieces logged at or after w, and those outside the ranges, are kept.
+func (e extents) cleaned(w int64, ranges []fileRange) extents {
+	out := make(extents, 0, len(e))
+	for _, x := range e {
+		if x.walOff >= w {
+			out = append(out, x)
+			continue
+		}
+		cur := x
+		for _, r := range ranges {
+			if cur.n == 0 || r.start >= cur.end() {
+				break
+			}
+			if r.end <= cur.off {
+				continue
+			}
+			if cur.off < r.start { // the part before the range stays
+				out = append(out, extent{off: cur.off, n: r.start - cur.off, walOff: cur.walOff})
+			}
+			if r.end >= cur.end() {
+				cur.n = 0
+				break
+			}
+			skip := r.end - cur.off
+			cur = extent{off: r.end, n: cur.n - skip, walOff: cur.walOff + int64(skip)} //nolint:gosec // within one record
+		}
+		if cur.n > 0 {
+			out = append(out, cur)
+		}
+	}
 	return out
 }

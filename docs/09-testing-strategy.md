@@ -546,6 +546,16 @@ slot away from home on a non-voter until the gate moves it, I-295),
   when the host restarts. The report's Restores section charts each job's bytes done
   with what was done meanwhile marked (the mirror unplugged and back, the host
   restarted, the cancel), and a table of jobs, roles, states, files and resumes.
+  33 stage (docs/04 §3, §2.1, `stagephase.go`, run after 24): the gateway reports its
+  stage (at least 1 GiB) and takes a file of `min(LargeFile, 512 MiB, stage/2)` written in
+  1 MiB pieces as fast as the driver can; every write is acknowledged, every status
+  sample has `staged` equal to the dirty and plan bytes and a log within the staged bytes
+  plus two segments and a chunk per dirty inode (a log drained front to back sheds its
+  segments), then the stage drains to nothing with the log gone, `flushed_bytes` grows by
+  at least the file and the file reads back exact on another gateway (I-396..I-398). A
+  drain rate seen in a sample, and the staged warning in every sample over 1 GiB, are
+  checked when a sample catches them and otherwise recorded as skipped; the report charts
+  the staged bytes and the drain rate.
   **Users first** (`make soak SOAK_FLAGS=-users-first`, `Run.UsersFirst`): a real volume
   has its first admin from `init`, so a run can put phase 0 before phase 1: the admin
   made as phase 28 makes them, the driver's mount uid and SMB account bound to them on

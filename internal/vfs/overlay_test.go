@@ -320,6 +320,7 @@ func TestOverlay_AbortFlush_MergesBackNewerWins(t *testing.T) {
 func TestOverlay_CommitFlushed_ResetsOrCompacts(t *testing.T) {
 	dir := t.TempDir()
 	ov, _ := newOverlay(t, dir)
+	ov.compactMin = 0 // compact whenever the dead bytes reach the live ones (I-397)
 	ino := meta.Ino(8)
 	big := bytes.Repeat([]byte("x"), 50000)
 	must(t, ov.Write(ino, 0, 0, big))
@@ -341,12 +342,8 @@ func TestOverlay_CommitFlushed_ResetsOrCompacts(t *testing.T) {
 	plan, _ = ov.SnapshotForFlush(ino)
 	must(t, ov.Write(ino, 50000, 10, []byte("fresh")))
 	must(t, ov.CommitFlushed(plan, 50000))
-	st, err := os.Stat(filepath.Join(dir, "8.wal"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.Size() > 1000 {
-		t.Fatalf("WAL not compacted: %d bytes", st.Size())
+	if lb := logBytes(t, dir, ino); lb > 1000 {
+		t.Fatalf("WAL not compacted: %d bytes", lb)
 	}
 	want := bytes.Clone(big)
 	copy(want[100:], bytes.Repeat([]byte("y"), 40000)) // committed → delivered by base

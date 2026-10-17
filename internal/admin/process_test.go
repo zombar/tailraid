@@ -25,7 +25,7 @@ func TestReport_ProcessAndFlushFields(t *testing.T) {
 	if g.DirtyInodes != 2 || g.DirtyBytes != 107 || g.PlanBytes != 300 || g.WALBytes != 500 || g.Flushing != 1 || g.LastFlushErr != "too few acks" {
 		t.Fatalf("gateway %+v", g)
 	}
-	if g.WALCap != uint64(vfs.DefaultWALCap) || g.FlushCap == 0 || g.FlushBytes != 0 {
+	if g.WALCap != max(uint64(vfs.DefaultWALCap), g.Stage) || g.Stage < vfs.MinStage || g.FlushCap == 0 || g.FlushBytes != 0 {
 		t.Fatalf("bounds %+v", g)
 	}
 	c.WriteFile(0, "/f", testharness.Pattern(2*int(testharness.ChunkSize), 1))

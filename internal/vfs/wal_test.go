@@ -188,8 +188,8 @@ func TestWAL_Compact_KeepsOnlyLive(t *testing.T) {
 	if len(offs) != len(recs) {
 		t.Fatalf("offs = %v", offs)
 	}
-	if w.Size() >= 10000 {
-		t.Fatalf("compacted size %d still holds dead data", w.Size())
+	if w.Bytes() >= 10000 {
+		t.Fatalf("compacted log %d bytes still holds dead data", w.Bytes())
 	}
 	if got := readWAL(t, w, offs[2], 4); string(got) != "ve-o" {
 		t.Fatalf("live1 after compact: %q", got)

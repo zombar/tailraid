@@ -304,6 +304,8 @@ func charts(s Summary) ([]template.HTML, string) {
 	stored, logical := chart.Series{Name: "stored bytes"}, chart.Series{Name: "logical bytes"}
 	wal, dirty := chart.Series{Name: "overlay WAL bytes"}, chart.Series{Name: "dirty bytes"}
 	plan, flush := chart.Series{Name: "plan bytes"}, chart.Series{Name: "flush buffers"}
+	staged, drainR := chart.Series{Name: "staged bytes"}, chart.Series{Name: "drain MiB/s"}
+	haveStage := false
 	heap, sys := chart.Series{Name: "heap in use"}, chart.Series{Name: "sys"}
 	haveMem := false
 	cpu, mcpu, load := chart.Series{Name: "process % of one CPU"}, chart.Series{Name: "machine % busy"}, chart.Series{Name: "load (1 min)"}
@@ -339,6 +341,9 @@ func charts(s Summary) ([]template.HTML, string) {
 		heap.Points = append(heap.Points, [2]float64{x(rec), float64(sm.HeapInuse)})
 		sys.Points = append(sys.Points, [2]float64{x(rec), float64(sm.Sys)})
 		haveWAL = haveWAL || sm.WALBytes > 0 || sm.DirtyBytes > 0
+		staged.Points = append(staged.Points, [2]float64{x(rec), float64(sm.Staged)})
+		drainR.Points = append(drainR.Points, [2]float64{x(rec), float64(sm.DrainRate) / (1 << 20)})
+		haveStage = haveStage || sm.Staged > 0
 		haveMem = haveMem || sm.HeapInuse > 0
 		cpu.Points = append(cpu.Points, [2]float64{x(rec), sm.CPUPct})
 		mcpu.Points = append(mcpu.Points, [2]float64{x(rec), sm.MachinePct})
@@ -400,6 +405,11 @@ func charts(s Summary) ([]template.HTML, string) {
 		template.HTML(chart.Line("Stored vs logical bytes (dedup)", "bytes", []chart.Series{stored, logical}, nil, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	if haveWAL {
 		out = append(out, template.HTML(chart.Line("Overlay WAL depth on the sampled node", "bytes", []chart.Series{wal, dirty, plan, flush}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
+	}
+	if haveStage {
+		out = append(out,
+			template.HTML(chart.Line("Staged on the sampled node, not yet spread (docs/04 §3)", "bytes", []chart.Series{staged}, marks, bands, chart.Axis{})), //nolint:gosec // generated SVG
+			template.HTML(chart.Line("The stage's drain rate (docs/04 §3)", "MiB/s", []chart.Series{drainR}, marks, bands, chart.Axis{})))                     //nolint:gosec // generated SVG
 	}
 	if haveTrash {
 		out = append(out, template.HTML(chart.Line("Trash and pinned cache (docs/06 §1, docs/13 §4)", "bytes", []chart.Series{trashB, pinnedB}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG

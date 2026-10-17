@@ -49,6 +49,7 @@ func TestWAL_Compact_StreamsThroughBoundedBuffer(t *testing.T) {
 	rec := &recordingFS{FS: sysfs.OS{}}
 	dir := t.TempDir()
 	ov, _ := newOverlay(t, dir, WithFS(rec))
+	ov.compactMin = -1 << 30 // compact at every commit
 	ino := meta.Ino(51)
 	live := pattern(5<<20, 9)
 	must(t, ov.Write(ino, 0, 0, pattern(4096, 1))) // flushed by the plan below
@@ -110,6 +111,7 @@ func TestOverlay_CommitFlushed_PostRenameError_OffsetsValid(t *testing.T) {
 	ff := sysfstest.New(sysfs.OS{})
 	dir := t.TempDir()
 	ov, _ := newOverlay(t, dir, WithFS(ff))
+	ov.compactMin = -1 << 30 // compact at every commit
 	ino := meta.Ino(52)
 	must(t, ov.Write(ino, 0, 0, pattern(4096, 1)))
 	plan, _ := ov.SnapshotForFlush(ino)

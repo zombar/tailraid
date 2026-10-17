@@ -116,6 +116,9 @@ export interface GatewayReport {
   dirty_bytes: number;
   wal_bytes: number;
   flushing: number;
+  staged: number; // dirty and plan bytes, on this host's disk only (docs/04 §3)
+  stage: number;
+  drain_rate: number; // bytes a second over the last minute
 }
 
 export interface MachineReport {
