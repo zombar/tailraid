@@ -177,11 +177,11 @@ function retryAfter(r: Response): number {
   return Number.isFinite(n) && n > 0 ? Math.min(n, 30) : 2;
 }
 
-/** later asks again, from the slow lane after wait seconds, for a thumbnail the node was still making, at most tries times in all, then hands what came back to done (docs/13 §5, I-374). */
-function later(img: HTMLImageElement, ask: () => Promise<Fetched>, wait: number, tries: number, done: (f: Fetched) => Promise<void>): void {
+/** later asks again, from the slow lane after wait seconds, for a thumbnail the node was still making, at most tries times in all, then hands what came back to done (docs/13 §5, I-374). Without img nothing can replace the asker, so it always goes on. */
+function later(img: HTMLImageElement | null, ask: () => Promise<Fetched>, wait: number, tries: number, done: (f: Fetched) => Promise<void>): void {
   window.setTimeout(() => {
     slow.push(async () => {
-      if (!img.isConnected) return; // a redraw replaced the tile
+      if (img && !img.isConnected) return; // a redraw replaced the tile
       const f = await ask();
       if (f.later !== undefined) {
         if (tries > 1) return later(img, ask, f.later, tries - 1, done);
@@ -190,6 +190,17 @@ function later(img: HTMLImageElement, ask: () => Promise<Fetched>, wait: number,
       return done(f);
     });
   }, wait * 1000);
+}
+
+/** fetchThumb is the thumbnail at url as an object URL, asked again while the node makes it (202) as a tile's is, or undefined on a miss (docs/13 §6); the caller revokes it. */
+export function fetchThumb(url: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const done = (f: Fetched): Promise<void> => {
+      resolve(f.src);
+      return Promise.resolve();
+    };
+    void load(url).then((f) => (f.later !== undefined ? later(null, () => load(url), f.later, TRIES, done) : done(f)));
+  });
 }
 
 /** load fetches a thumbnail as an object URL, a "later" while the node makes it, or nothing on a miss, an error or LOAD_TIMEOUT. */

@@ -6,6 +6,7 @@
 import { h } from "./dom.ts";
 import { icon, type IconName } from "./icons.ts";
 import { fileURL, tags, thumbURL, type Src } from "./api.ts";
+import { fetchThumb } from "./thumbs.ts";
 import { basename, ext, mmss, session } from "./util.ts";
 
 export interface Track {
@@ -45,6 +46,8 @@ class Player {
   private bar: HTMLElement | null = null;
   private queueEl: HTMLElement | null = null;
   private els: Record<string, HTMLElement> = {};
+  private coverFor = ""; // the thumbnail URL the bar's cover shows or is fetching
+  private coverSrc = ""; // its picture as an object URL, once it came
   private saveTimer = 0;
 
   current(): Track | null {
@@ -326,6 +329,30 @@ class Player {
     session.set(KEY, s);
   }
 
+  /**
+   * drawCover shows the thumbnail at want: the track's picture or the cover beside it,
+   * whatever has_cover says (only the embedded picture), fetched once per track and asked
+   * again while the node makes it (a 202, I-374); a miss leaves the box empty until
+   * another track plays (docs/13 §6). The picture is also the media session's artwork.
+   */
+  private drawCover(cover: HTMLImageElement, want: string): void {
+    if (want === this.coverFor) return;
+    this.coverFor = want;
+    if (this.coverSrc) URL.revokeObjectURL(this.coverSrc);
+    this.coverSrc = "";
+    cover.removeAttribute("src");
+    void fetchThumb(want).then((src) => {
+      if (this.coverFor !== want) { // another track since
+        if (src) URL.revokeObjectURL(src);
+        return;
+      }
+      if (!src) return;
+      this.coverSrc = src;
+      cover.src = src;
+      this.mediaSession();
+    });
+  }
+
   private mediaSession(): void {
     if (!("mediaSession" in navigator)) return;
     const ms = navigator.mediaSession;
@@ -338,7 +365,7 @@ class Player {
       title: c.title ?? basename(c.path),
       artist: c.artist ?? "",
       album: c.album ?? "",
-      artwork: c.hasCover === false ? [] : [{ src: thumbURL(c.path, c.root), sizes: "320x320", type: "image/jpeg" }],
+      artwork: this.coverSrc && this.coverFor === thumbURL(c.path, c.root) ? [{ src: this.coverSrc, sizes: "320x320", type: "image/jpeg" }] : [],
     });
     ms.setActionHandler("play", () => this.toggle());
     ms.setActionHandler("pause", () => this.pause());
@@ -378,13 +405,7 @@ class Player {
 
   private buildBar(): void {
     const cover = h("img", { class: "cover", alt: "" }) as HTMLImageElement;
-    // a track with no picture and no cover beside it answers 404: the box stays empty
-    // and this URL is not asked again until another track plays (a redraw on every
-    // timeupdate otherwise set it again and showed the broken-image glyph)
-    cover.addEventListener("error", () => {
-      cover.dataset.failed = cover.getAttribute("src") ?? "";
-      cover.removeAttribute("src");
-    });
+    cover.addEventListener("error", () => cover.removeAttribute("src")); // never the broken-image glyph
     const title = h("div", { class: "title" });
     const sub = h("div", { class: "sub" });
     const prev = iconBtn("skip_previous_fill", "previous", () => this.prev());
@@ -432,13 +453,7 @@ class Player {
     if (this.queueEl) this.queueEl.hidden = !c || !this.bar.classList.contains("expanded");
     if (!c) return;
     const e = this.els;
-    const cover = e.cover as HTMLImageElement;
-    let want = c.hasCover === false ? "" : thumbURL(c.path, c.root);
-    if (want && cover.dataset.failed === want) want = "";
-    if (cover.getAttribute("src") !== want) {
-      if (want) cover.src = want;
-      else cover.removeAttribute("src");
-    }
+    this.drawCover(e.cover as HTMLImageElement, thumbURL(c.path, c.root));
     e.title!.textContent = c.title ?? basename(c.path);
     e.sub!.textContent = [c.artist, c.album].filter(Boolean).join(" — ") || ext(c.path);
     face(e.playBtn!, this.playing ? "pause_fill" : "play_arrow_fill", this.playing ? "pause" : "play");

@@ -1806,6 +1806,300 @@ function badge(purgeAt) {
   return h("span", { class: "badge" }, left ? `deleted \xB7 ${left}` : "deleted");
 }
 
+// internal/webui/src/thumbs.ts
+var FAST = 4;
+var SLOW = 2;
+var GRABS = 1;
+var TRIES = 5;
+var WIDTH = 320;
+var RECIPE = 2;
+var POSITIONS = [0.5, 0.25, 0.75, 0.1, 0.9];
+var MIN_LUMA = 28;
+var MIN_SPREAD = 14;
+var PROBE = 64;
+var LOAD_TIMEOUT = 2e4;
+var FRAME_TIMEOUT = 15e3;
+var NO_FRAME = /* @__PURE__ */ new Set(["avi", "wmv", "mpg", "mpeg", "flv", "vob", "rm", "rmvb", "divx", "asf"]);
+var Lane = class {
+  constructor(max) {
+    this.max = max;
+  }
+  max;
+  queue = [];
+  active = 0;
+  push(job) {
+    this.queue.push(job);
+    this.pump();
+  }
+  /** take removes a job that has not started. */
+  take(job) {
+    const i = this.queue.indexOf(job);
+    if (i >= 0) this.queue.splice(i, 1);
+  }
+  pump() {
+    while (this.active < this.max && this.queue.length) {
+      const job = this.queue.shift();
+      this.active++;
+      void job().catch(() => void 0).finally(() => {
+        this.active--;
+        this.pump();
+      });
+    }
+  }
+};
+var fast = new Lane(FAST);
+var slow = new Lane(SLOW);
+var grabs = new Lane(GRABS);
+var pending2 = /* @__PURE__ */ new Map();
+var observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(
+  (entries) => {
+    for (const e of entries) {
+      const p = pending2.get(e.target);
+      if (!p) continue;
+      if (e.isIntersecting && !p.queued) {
+        p.queued = true;
+        fast.push(p.job);
+      } else if (!e.isIntersecting && p.queued) {
+        p.queued = false;
+        fast.take(p.job);
+      }
+    }
+  },
+  { rootMargin: "200px" }
+);
+function lazy(img, e, path, root, kind2, onMiss) {
+  const miss = () => {
+    if (img.isConnected) onMiss();
+  };
+  const settle = async (f) => {
+    if (!f.src) return miss();
+    if (!img.isConnected) return URL.revokeObjectURL(f.src);
+    return showBlob(img, f.src, onMiss);
+  };
+  const show = async (url) => {
+    const f = await load(url);
+    if (f.later !== void 0) return later(img, () => load(url), f.later, TRIES, settle);
+    return settle(f);
+  };
+  const tag = kind2 === "video" ? `${e.version}.f${RECIPE}` : void 0;
+  const job = async () => {
+    pending2.delete(img);
+    observer?.unobserve(img);
+    if (!img.isConnected) return;
+    if (kind2 === "dir" && root === void 0) {
+      const done = async (r2) => {
+        if (r2.src) return showBlob(img, r2.src, onMiss);
+        if (!r2.grab) return miss();
+        const g = r2.grab;
+        grabs.push(async () => {
+          if (!img.isConnected) return;
+          if (!near(img)) return wait2();
+          if (!await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false })) return miss();
+          const again = await folder(path);
+          if (again.later !== void 0) return later(img, () => folder(path), again.later, TRIES, settle);
+          if (again.src) await showBlob(img, again.src, onMiss);
+          else miss();
+        });
+      };
+      const r = await folder(path);
+      if (r.later !== void 0) return later(img, () => folder(path), r.later, TRIES, done);
+      return done(r);
+    }
+    if (e.thumb || kind2 !== "video" || root !== void 0) return show(thumbURL(path, root, tag));
+    grabs.push(async () => {
+      if (!img.isConnected) return;
+      if (!near(img)) return wait2();
+      if (await grab(path, e)) await show(thumbURL(path, void 0, tag));
+      else miss();
+    });
+  };
+  const p = { img, job, queued: false };
+  const wait2 = () => {
+    if (!observer) return;
+    p.queued = false;
+    pending2.set(img, p);
+    observer.observe(img);
+  };
+  if (observer) wait2();
+  else {
+    p.queued = true;
+    fast.push(job);
+  }
+}
+function near(img) {
+  const r = img.getBoundingClientRect();
+  return r.bottom >= -200 && r.top <= window.innerHeight + 200;
+}
+function retryAfter(r) {
+  const n = Number(r.headers.get("Retry-After"));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 30) : 2;
+}
+function later(img, ask, wait2, tries, done) {
+  window.setTimeout(() => {
+    slow.push(async () => {
+      if (img && !img.isConnected) return;
+      const f = await ask();
+      if (f.later !== void 0) {
+        if (tries > 1) return later(img, ask, f.later, tries - 1, done);
+        return done({});
+      }
+      return done(f);
+    });
+  }, wait2 * 1e3);
+}
+function fetchThumb(url) {
+  return new Promise((resolve) => {
+    const done = (f) => {
+      resolve(f.src);
+      return Promise.resolve();
+    };
+    void load(url).then((f) => f.later !== void 0 ? later(null, () => load(url), f.later, TRIES, done) : done(f));
+  });
+}
+async function load(url) {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(LOAD_TIMEOUT) });
+    if (r.status === 202) return { later: retryAfter(r) };
+    if (!r.ok) return {};
+    return { src: URL.createObjectURL(await r.blob()) };
+  } catch {
+    return {};
+  }
+}
+function showBlob(img, src2, onMiss) {
+  return new Promise((resolve) => {
+    img.onload = () => {
+      URL.revokeObjectURL(src2);
+      resolve();
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(src2);
+      onMiss();
+      resolve();
+    };
+    img.src = src2;
+  });
+}
+async function folder(path) {
+  const r = await fetch(thumbURL(path), { signal: AbortSignal.timeout(LOAD_TIMEOUT) }).catch(() => void 0);
+  if (!r) return {};
+  if (r.status === 202) return { later: retryAfter(r) };
+  if (r.ok) return { src: URL.createObjectURL(await r.blob()) };
+  if (r.status !== 404) return {};
+  const miss = await r.json().catch(() => ({}));
+  return { grab: miss.grab };
+}
+async function grab(path, e) {
+  if (NO_FRAME.has(ext(path))) return false;
+  const key = `tr.vthumb:${e.ino}.${e.version}.f${RECIPE}`;
+  if (session.get(key, false)) return false;
+  session.set(key, true);
+  const blob = await frame(fileURL(path));
+  if (!blob) return false;
+  await putThumb(path, e.version, blob);
+  return true;
+}
+async function frame(src2) {
+  const v = document.createElement("video");
+  v.preload = "auto";
+  v.muted = true;
+  v.playsInline = true;
+  v.crossOrigin = "anonymous";
+  let timer = 0;
+  const expired = new Promise((resolve) => {
+    timer = window.setTimeout(() => resolve(null), FRAME_TIMEOUT);
+  });
+  const choose = async () => {
+    v.src = src2;
+    await event(v, "loadedmetadata");
+    if (!Number.isFinite(v.duration) || v.duration <= 0) return null;
+    const w = Math.min(WIDTH, v.videoWidth || WIDTH);
+    const h2 = Math.max(1, Math.round((v.videoHeight || 9) * (w / (v.videoWidth || 16))));
+    let best = null;
+    let bestScore = -1;
+    for (const at of POSITIONS) {
+      v.currentTime = v.duration * at;
+      await event(v, "seeked");
+      await presented(v);
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h2;
+      const g = c.getContext("2d");
+      if (!g) return null;
+      g.drawImage(v, 0, 0, w, h2);
+      const { mean, spread: spread2 } = luma(c);
+      if (mean >= MIN_LUMA && spread2 >= MIN_SPREAD) {
+        best = c;
+        break;
+      }
+      const score = spread2 + mean / 4;
+      if (score > bestScore) {
+        best = c;
+        bestScore = score;
+      }
+    }
+    if (!best) return null;
+    const chosen = best;
+    return new Promise((resolve) => chosen.toBlob((b) => resolve(b), "image/jpeg", 0.8));
+  };
+  try {
+    return await Promise.race([choose().catch(() => null), expired]);
+  } finally {
+    clearTimeout(timer);
+    v.removeAttribute("src");
+    v.load();
+  }
+}
+function event(v, name) {
+  return new Promise((resolve, reject) => {
+    const ok = () => {
+      v.removeEventListener("error", bad);
+      resolve();
+    };
+    const bad = () => {
+      v.removeEventListener(name, ok);
+      reject(new Error("video error"));
+    };
+    v.addEventListener(name, ok, { once: true });
+    v.addEventListener("error", bad, { once: true });
+  });
+}
+function presented(v) {
+  return new Promise((resolve) => {
+    const t = window.setTimeout(resolve, 1e3);
+    const done = () => {
+      clearTimeout(t);
+      resolve();
+    };
+    if (typeof v.requestVideoFrameCallback === "function") {
+      v.requestVideoFrameCallback(() => done());
+    } else if (v.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      done();
+    } else {
+      v.addEventListener("loadeddata", done, { once: true });
+    }
+  });
+}
+function luma(c) {
+  const p = document.createElement("canvas");
+  p.width = PROBE;
+  p.height = Math.max(1, Math.round(c.height * PROBE / c.width));
+  const g = p.getContext("2d", { willReadFrequently: true });
+  if (!g) return { mean: 0, spread: 0 };
+  g.drawImage(c, 0, 0, p.width, p.height);
+  const d = g.getImageData(0, 0, p.width, p.height).data;
+  let sum = 0;
+  let sq = 0;
+  const n = d.length / 4;
+  for (let i = 0; i < d.length; i += 4) {
+    const y = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+    sum += y;
+    sq += y * y;
+  }
+  const mean = sum / n;
+  return { mean, spread: Math.sqrt(Math.max(0, sq / n - mean * mean)) };
+}
+
 // internal/webui/src/audio.ts
 var KEY2 = "tr.now";
 var Player = class {
@@ -1824,6 +2118,10 @@ var Player = class {
   bar = null;
   queueEl = null;
   els = {};
+  coverFor = "";
+  // the thumbnail URL the bar's cover shows or is fetching
+  coverSrc = "";
+  // its picture as an object URL, once it came
   saveTimer = 0;
   current() {
     return this.index >= 0 ? this.queue[this.index] ?? null : null;
@@ -2077,6 +2375,29 @@ var Player = class {
     const s = { queue: this.queue.map((t) => ({ path: t.path, root: t.root, title: t.title, artist: t.artist, album: t.album, dur: t.dur, hasCover: t.hasCover })), index: this.index, pos: this.a.currentTime || 0, repeat: this.repeat, shuffle: this.shuffle, seed: this.seed };
     session.set(KEY2, s);
   }
+  /**
+   * drawCover shows the thumbnail at want: the track's picture or the cover beside it,
+   * whatever has_cover says (only the embedded picture), fetched once per track and asked
+   * again while the node makes it (a 202, I-374); a miss leaves the box empty until
+   * another track plays (docs/13 §6). The picture is also the media session's artwork.
+   */
+  drawCover(cover, want) {
+    if (want === this.coverFor) return;
+    this.coverFor = want;
+    if (this.coverSrc) URL.revokeObjectURL(this.coverSrc);
+    this.coverSrc = "";
+    cover.removeAttribute("src");
+    void fetchThumb(want).then((src2) => {
+      if (this.coverFor !== want) {
+        if (src2) URL.revokeObjectURL(src2);
+        return;
+      }
+      if (!src2) return;
+      this.coverSrc = src2;
+      cover.src = src2;
+      this.mediaSession();
+    });
+  }
   mediaSession() {
     if (!("mediaSession" in navigator)) return;
     const ms = navigator.mediaSession;
@@ -2089,7 +2410,7 @@ var Player = class {
       title: c.title ?? basename(c.path),
       artist: c.artist ?? "",
       album: c.album ?? "",
-      artwork: c.hasCover === false ? [] : [{ src: thumbURL(c.path, c.root), sizes: "320x320", type: "image/jpeg" }]
+      artwork: this.coverSrc && this.coverFor === thumbURL(c.path, c.root) ? [{ src: this.coverSrc, sizes: "320x320", type: "image/jpeg" }] : []
     });
     ms.setActionHandler("play", () => this.toggle());
     ms.setActionHandler("pause", () => this.pause());
@@ -2127,10 +2448,7 @@ var Player = class {
   }
   buildBar() {
     const cover = h("img", { class: "cover", alt: "" });
-    cover.addEventListener("error", () => {
-      cover.dataset.failed = cover.getAttribute("src") ?? "";
-      cover.removeAttribute("src");
-    });
+    cover.addEventListener("error", () => cover.removeAttribute("src"));
     const title = h("div", { class: "title" });
     const sub = h("div", { class: "sub" });
     const prev = iconBtn("skip_previous_fill", "previous", () => this.prev());
@@ -2179,13 +2497,7 @@ var Player = class {
     if (this.queueEl) this.queueEl.hidden = !c || !this.bar.classList.contains("expanded");
     if (!c) return;
     const e = this.els;
-    const cover = e.cover;
-    let want = c.hasCover === false ? "" : thumbURL(c.path, c.root);
-    if (want && cover.dataset.failed === want) want = "";
-    if (cover.getAttribute("src") !== want) {
-      if (want) cover.src = want;
-      else cover.removeAttribute("src");
-    }
+    this.drawCover(e.cover, thumbURL(c.path, c.root));
     e.title.textContent = c.title ?? basename(c.path);
     e.sub.textContent = [c.artist, c.album].filter(Boolean).join(" \u2014 ") || ext(c.path);
     face(e.playBtn, this.playing ? "pause_fill" : "play_arrow_fill", this.playing ? "pause" : "play");
@@ -2667,291 +2979,6 @@ var Selection = class {
     for (const fn of this.listeners) fn();
   }
 };
-
-// internal/webui/src/thumbs.ts
-var FAST = 4;
-var SLOW = 2;
-var GRABS = 1;
-var TRIES = 5;
-var WIDTH = 320;
-var RECIPE = 2;
-var POSITIONS = [0.5, 0.25, 0.75, 0.1, 0.9];
-var MIN_LUMA = 28;
-var MIN_SPREAD = 14;
-var PROBE = 64;
-var LOAD_TIMEOUT = 2e4;
-var FRAME_TIMEOUT = 15e3;
-var NO_FRAME = /* @__PURE__ */ new Set(["avi", "wmv", "mpg", "mpeg", "flv", "vob", "rm", "rmvb", "divx", "asf"]);
-var Lane = class {
-  constructor(max) {
-    this.max = max;
-  }
-  max;
-  queue = [];
-  active = 0;
-  push(job) {
-    this.queue.push(job);
-    this.pump();
-  }
-  /** take removes a job that has not started. */
-  take(job) {
-    const i = this.queue.indexOf(job);
-    if (i >= 0) this.queue.splice(i, 1);
-  }
-  pump() {
-    while (this.active < this.max && this.queue.length) {
-      const job = this.queue.shift();
-      this.active++;
-      void job().catch(() => void 0).finally(() => {
-        this.active--;
-        this.pump();
-      });
-    }
-  }
-};
-var fast = new Lane(FAST);
-var slow = new Lane(SLOW);
-var grabs = new Lane(GRABS);
-var pending2 = /* @__PURE__ */ new Map();
-var observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(
-  (entries) => {
-    for (const e of entries) {
-      const p = pending2.get(e.target);
-      if (!p) continue;
-      if (e.isIntersecting && !p.queued) {
-        p.queued = true;
-        fast.push(p.job);
-      } else if (!e.isIntersecting && p.queued) {
-        p.queued = false;
-        fast.take(p.job);
-      }
-    }
-  },
-  { rootMargin: "200px" }
-);
-function lazy(img, e, path, root, kind2, onMiss) {
-  const miss = () => {
-    if (img.isConnected) onMiss();
-  };
-  const settle = async (f) => {
-    if (!f.src) return miss();
-    if (!img.isConnected) return URL.revokeObjectURL(f.src);
-    return showBlob(img, f.src, onMiss);
-  };
-  const show = async (url) => {
-    const f = await load(url);
-    if (f.later !== void 0) return later(img, () => load(url), f.later, TRIES, settle);
-    return settle(f);
-  };
-  const tag = kind2 === "video" ? `${e.version}.f${RECIPE}` : void 0;
-  const job = async () => {
-    pending2.delete(img);
-    observer?.unobserve(img);
-    if (!img.isConnected) return;
-    if (kind2 === "dir" && root === void 0) {
-      const done = async (r2) => {
-        if (r2.src) return showBlob(img, r2.src, onMiss);
-        if (!r2.grab) return miss();
-        const g = r2.grab;
-        grabs.push(async () => {
-          if (!img.isConnected) return;
-          if (!near(img)) return wait2();
-          if (!await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false })) return miss();
-          const again = await folder(path);
-          if (again.later !== void 0) return later(img, () => folder(path), again.later, TRIES, settle);
-          if (again.src) await showBlob(img, again.src, onMiss);
-          else miss();
-        });
-      };
-      const r = await folder(path);
-      if (r.later !== void 0) return later(img, () => folder(path), r.later, TRIES, done);
-      return done(r);
-    }
-    if (e.thumb || kind2 !== "video" || root !== void 0) return show(thumbURL(path, root, tag));
-    grabs.push(async () => {
-      if (!img.isConnected) return;
-      if (!near(img)) return wait2();
-      if (await grab(path, e)) await show(thumbURL(path, void 0, tag));
-      else miss();
-    });
-  };
-  const p = { img, job, queued: false };
-  const wait2 = () => {
-    if (!observer) return;
-    p.queued = false;
-    pending2.set(img, p);
-    observer.observe(img);
-  };
-  if (observer) wait2();
-  else {
-    p.queued = true;
-    fast.push(job);
-  }
-}
-function near(img) {
-  const r = img.getBoundingClientRect();
-  return r.bottom >= -200 && r.top <= window.innerHeight + 200;
-}
-function retryAfter(r) {
-  const n = Number(r.headers.get("Retry-After"));
-  return Number.isFinite(n) && n > 0 ? Math.min(n, 30) : 2;
-}
-function later(img, ask, wait2, tries, done) {
-  window.setTimeout(() => {
-    slow.push(async () => {
-      if (!img.isConnected) return;
-      const f = await ask();
-      if (f.later !== void 0) {
-        if (tries > 1) return later(img, ask, f.later, tries - 1, done);
-        return done({});
-      }
-      return done(f);
-    });
-  }, wait2 * 1e3);
-}
-async function load(url) {
-  try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(LOAD_TIMEOUT) });
-    if (r.status === 202) return { later: retryAfter(r) };
-    if (!r.ok) return {};
-    return { src: URL.createObjectURL(await r.blob()) };
-  } catch {
-    return {};
-  }
-}
-function showBlob(img, src2, onMiss) {
-  return new Promise((resolve) => {
-    img.onload = () => {
-      URL.revokeObjectURL(src2);
-      resolve();
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(src2);
-      onMiss();
-      resolve();
-    };
-    img.src = src2;
-  });
-}
-async function folder(path) {
-  const r = await fetch(thumbURL(path), { signal: AbortSignal.timeout(LOAD_TIMEOUT) }).catch(() => void 0);
-  if (!r) return {};
-  if (r.status === 202) return { later: retryAfter(r) };
-  if (r.ok) return { src: URL.createObjectURL(await r.blob()) };
-  if (r.status !== 404) return {};
-  const miss = await r.json().catch(() => ({}));
-  return { grab: miss.grab };
-}
-async function grab(path, e) {
-  if (NO_FRAME.has(ext(path))) return false;
-  const key = `tr.vthumb:${e.ino}.${e.version}.f${RECIPE}`;
-  if (session.get(key, false)) return false;
-  session.set(key, true);
-  const blob = await frame(fileURL(path));
-  if (!blob) return false;
-  await putThumb(path, e.version, blob);
-  return true;
-}
-async function frame(src2) {
-  const v = document.createElement("video");
-  v.preload = "auto";
-  v.muted = true;
-  v.playsInline = true;
-  v.crossOrigin = "anonymous";
-  let timer = 0;
-  const expired = new Promise((resolve) => {
-    timer = window.setTimeout(() => resolve(null), FRAME_TIMEOUT);
-  });
-  const choose = async () => {
-    v.src = src2;
-    await event(v, "loadedmetadata");
-    if (!Number.isFinite(v.duration) || v.duration <= 0) return null;
-    const w = Math.min(WIDTH, v.videoWidth || WIDTH);
-    const h2 = Math.max(1, Math.round((v.videoHeight || 9) * (w / (v.videoWidth || 16))));
-    let best = null;
-    let bestScore = -1;
-    for (const at of POSITIONS) {
-      v.currentTime = v.duration * at;
-      await event(v, "seeked");
-      await presented(v);
-      const c = document.createElement("canvas");
-      c.width = w;
-      c.height = h2;
-      const g = c.getContext("2d");
-      if (!g) return null;
-      g.drawImage(v, 0, 0, w, h2);
-      const { mean, spread: spread2 } = luma(c);
-      if (mean >= MIN_LUMA && spread2 >= MIN_SPREAD) {
-        best = c;
-        break;
-      }
-      const score = spread2 + mean / 4;
-      if (score > bestScore) {
-        best = c;
-        bestScore = score;
-      }
-    }
-    if (!best) return null;
-    const chosen = best;
-    return new Promise((resolve) => chosen.toBlob((b) => resolve(b), "image/jpeg", 0.8));
-  };
-  try {
-    return await Promise.race([choose().catch(() => null), expired]);
-  } finally {
-    clearTimeout(timer);
-    v.removeAttribute("src");
-    v.load();
-  }
-}
-function event(v, name) {
-  return new Promise((resolve, reject) => {
-    const ok = () => {
-      v.removeEventListener("error", bad);
-      resolve();
-    };
-    const bad = () => {
-      v.removeEventListener(name, ok);
-      reject(new Error("video error"));
-    };
-    v.addEventListener(name, ok, { once: true });
-    v.addEventListener("error", bad, { once: true });
-  });
-}
-function presented(v) {
-  return new Promise((resolve) => {
-    const t = window.setTimeout(resolve, 1e3);
-    const done = () => {
-      clearTimeout(t);
-      resolve();
-    };
-    if (typeof v.requestVideoFrameCallback === "function") {
-      v.requestVideoFrameCallback(() => done());
-    } else if (v.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-      done();
-    } else {
-      v.addEventListener("loadeddata", done, { once: true });
-    }
-  });
-}
-function luma(c) {
-  const p = document.createElement("canvas");
-  p.width = PROBE;
-  p.height = Math.max(1, Math.round(c.height * PROBE / c.width));
-  const g = p.getContext("2d", { willReadFrequently: true });
-  if (!g) return { mean: 0, spread: 0 };
-  g.drawImage(c, 0, 0, p.width, p.height);
-  const d = g.getImageData(0, 0, p.width, p.height).data;
-  let sum = 0;
-  let sq = 0;
-  const n = d.length / 4;
-  for (let i = 0; i < d.length; i += 4) {
-    const y = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
-    sum += y;
-    sq += y * y;
-  }
-  const mean = sum / n;
-  return { mean, spread: Math.sqrt(Math.max(0, sq / n - mean * mean)) };
-}
 
 // internal/webui/src/flags.ts
 function menu(ctx) {

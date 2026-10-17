@@ -453,9 +453,13 @@ attribute win over any display a class sets. The bar carries the cover, title an
 artist — album, previous · play/pause · next, a seek slider with the elapsed and total
 time, repeat (off, all, one) and shuffle, opens into the queue, and ends in a close button
 that stops the track and empties the queue, as the queue's Clear does, so the bar goes
-away. A track whose cover will not load (no picture in it and none beside it: the
-thumbnail answers 404) leaves the cover's box empty, never a broken image, and the bar
-does not ask for that URL again until another track plays. Playing a track queues
+away. The cover is the track's thumbnail, its own picture or the `cover.*`/`folder.*`
+beside it, asked for whatever the tags say (`has_cover` is only the embedded picture)
+and fetched as the tiles fetch theirs: a 202 is asked again after its `Retry-After`
+(I-374), and the picture, once it came, is also the media session's artwork. A track
+whose cover will not load (no picture in it and none beside it: the thumbnail answers
+404) leaves the cover's box empty, never a broken image, and the bar does not ask again
+until another track plays. Playing a track queues
 its folder in track order; "Play all" and "Shuffle" on an album, "Play" and "Add to queue"
 on a selection do the same for any set of audio files or folders. The next track is
 preloaded in a second hidden `<audio>` and swapped in when the first ends, so an album
