@@ -603,9 +603,9 @@ the Cover Art Archive data are CC0 and need none.
 | I-387 | `TestPass_FromFeed_MatchesFullWalk`, `TestPass_NothingChanged_WalksNothing`, `TestPass_CatalogueRebuildsTouchedLibraryOnly`, `TestPass_LateTrackRebuildsItsAlbum` |
 | I-388 | `TestSearch_Names_FromFeed_MatchesRebuild`, `TestSearch_Names_UpdateCostIsTheChanges` |
 | I-384 | `TestStore_Libraries_CostIndependentOfInodes`, `TestStore_Libraries`, `TestFSM_ApplySnapshotRestoreEquivalence` |
-| I-411 | `TestParseQuery_Table`, `TestParseQuery_Bounds_Table`, `FuzzParseQuery`, `TestWebUI_Search_MediaScope` |
-| I-412 | `TestFields_Match_Table`, `TestFields_TableFromCatalogue_EqualsRebuild`, `TestSearch_ScopesMatchSameItems`, `TestCatalog_SectionVersions`, `TestCluster_SearchDeterministicAcrossNodes`, `TestWebUI_Search_MediaScope` |
-| I-413 | `TestSuggest_Table`, `TestSuggest_LimitBoundaries`, `TestCluster_SearchDeterministicAcrossNodes`, `TestWebUI_Search_Suggest` |
+| I-411 | `TestParseQuery_Table`, `TestParseQuery_Bounds_Table`, `FuzzParseQuery`, `TestWebUI_Search_MediaScope`, `TestSoak_AllPhasesAgainstHarness` |
+| I-412 | `TestFields_Match_Table`, `TestFields_TableFromCatalogue_EqualsRebuild`, `TestSearch_ScopesMatchSameItems`, `TestCatalog_SectionVersions`, `TestCluster_SearchDeterministicAcrossNodes`, `TestWebUI_Search_MediaScope`, `TestSoak_AllPhasesAgainstHarness`, `TestReport_MediaQueries` |
+| I-413 | `TestSuggest_Table`, `TestSuggest_LimitBoundaries`, `TestCluster_SearchDeterministicAcrossNodes`, `TestWebUI_Search_Suggest`, `TestSoak_AllPhasesAgainstHarness` |
 | I-210 | `TestFSM_SetAttr_LibraryKind_Table`, `TestFSM_LibraryEffective_NearestAncestor`, `TestStore_Libraries`, `TestEncodeCommand_V6Gating`, `TestEncodeCommand_Golden`, `TestCluster_Codec6RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table` |
 | I-276 | `TestNames_Table`, `FuzzAnalyze`, `TestNames_Corpus`, `TestNames_FolderRoles`, `TestCatalog_MusicRoles_Table`, `TestCatalog_ExtrasNotItems`, `TestCatalog_SectionVersions` |
 | I-277 | `TestFSM_SetAttr_LibraryRoms_Table`, `TestEncodeCommand_V10Gating`, `TestCluster_Codec10RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table`, `TestFS_SetFlags_RomsWaitsForCodec10` |

@@ -1461,10 +1461,10 @@ placement gives way to legible text: the dashed line keeps the event's true time
 | I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
 | I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |
 | I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_ShowStill`, `TestWebUI_Media_ShowSplitAcrossFolders`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
-| I-407 | `TestWebUI_Playback_ViewerFromRequest_Table`, `TestWebUI_Playback_UserNeedsRead`, `TestWebUI_Playback_RowsAreTheViewers` |
-| I-408 | `TestWebUI_Playback_Coalesce_Table`, `TestWebUI_Playback_FinalAndActionsAtOnce`, `TestWebUI_Playback_RefusalIsStatus` |
-| I-409 | `TestWebUI_Continue_Table`, `TestWebUI_Continue_NextUpAcrossSeason`, `TestWebUI_Continue_TrashAndUnflaggedDrop`, `TestWebUI_Continue_DeterministicAcrossNodes` |
-| I-410 | `TestWebUI_Media_ProgressFields_Table`, `TestWebUI_Media_ShowWatchedAndNext`, `TestWebUI_Media_SortPlayed`, `TestWebUI_Media_AlbumTrackPlays`, `TestWebUI_Continue_DeterministicAcrossNodes` |
+| I-407 | `TestWebUI_Playback_ViewerFromRequest_Table`, `TestWebUI_Playback_UserNeedsRead`, `TestWebUI_Playback_RowsAreTheViewers`, `TestSoak_AllPhasesAgainstHarness` |
+| I-408 | `TestWebUI_Playback_Coalesce_Table`, `TestWebUI_Playback_FinalAndActionsAtOnce`, `TestWebUI_Playback_RefusalIsStatus`, `TestSoak_AllPhasesAgainstHarness` |
+| I-409 | `TestWebUI_Continue_Table`, `TestWebUI_Continue_NextUpAcrossSeason`, `TestWebUI_Continue_TrashAndUnflaggedDrop`, `TestWebUI_Continue_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` |
+| I-410 | `TestWebUI_Media_ProgressFields_Table`, `TestWebUI_Media_ShowWatchedAndNext`, `TestWebUI_Media_SortPlayed`, `TestWebUI_Media_AlbumTrackPlays`, `TestWebUI_Continue_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` |
 | I-414 | `TestStatic_MediaRoutesNeverFileRoute`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` (the fullscreen flow and the overlays are manual checks 28–30) |
 | I-297 | `TestChart_MarkLabels_Lane_Table`, `TestChart_Line_MarkLabelsBelowAxis_HeightFixed` |
 | I-283 | `TestCSS_ColoursOnlyInTokens`, `TestCSS_HasColour_Table` |
