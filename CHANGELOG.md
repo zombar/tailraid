@@ -2,6 +2,27 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.10.4 (2026-10-17)
+
+### Changes
+
+- webui: a platform's game tiles take the shape of its box art, and nothing is cropped ([d490c0f](https://github.com/zombar/tailraid/commit/d490c0f))
+- webui: the now-playing bar closes, and a cover that fails to load leaves an empty box ([56dc1cd](https://github.com/zombar/tailraid/commit/56dc1cd))
+- repair, soak: a target that can take shards again calls a sweep when the last one left away bytes unmovable (I-379) ([e035867](https://github.com/zombar/tailraid/commit/e035867))
+- meta, search, pins: a change feed in the FSM, and search and pins follow it instead of walking (I-386..I-389) ([255d0e9](https://github.com/zombar/tailraid/commit/255d0e9))
+- meta: a Commit that only appends extends the chunk list in place, not a copy of it (I-385) ([4489ddf](https://github.com/zombar/tailraid/commit/4489ddf))
+- meta: Libraries reads an applier-kept set of the library directories, not every inode (I-384) ([1408636](https://github.com/zombar/tailraid/commit/1408636))
+- meta: a state clone shares the chunk entries; an apply replaces a chunk, never changes it in place (I-383) ([88561f9](https://github.com/zombar/tailraid/commit/88561f9))
+- mirror, soak: an unplug in the middle of a write never recreates the mirror's root (I-180) ([eda193d](https://github.com/zombar/tailraid/commit/eda193d))
+- meta, repair: GCDelete and Purge take their batch from applier-kept queues, not a walk of every tombstone or trash root (I-381, I-382) ([4329977](https://github.com/zombar/tailraid/commit/4329977))
+- meta, admin, repair: status and the repair pass work from placement classes, not a walk of every chunk (I-377..I-380) ([d6aec3d](https://github.com/zombar/tailraid/commit/d6aec3d))
+- admin, cluster, meta: a status walk asks each member's liveness once, and network counters survive a 32-bit wrap (I-375, I-376) ([54a55e9](https://github.com/zombar/tailraid/commit/54a55e9))
+- soak: the compose rig adds its scratch mirror once and plugs it back in before reusing it ([8690f58](https://github.com/zombar/tailraid/commit/8690f58))
+
+### Tooling
+
+- tests: fix the seed-, OS- and load-dependent failures CI and the gate found on 2026-10-16 ([455e10d](https://github.com/zombar/tailraid/commit/455e10d))
+
 ## v0.10.3 (2026-10-16)
 
 ### Changes
