@@ -338,8 +338,10 @@ type State struct {
 	Grants    map[GrantKey]*Grant
 	Invites   map[[32]byte]*Invite
 	Sessions  map[[32]byte]*Session
-	Applied   uint64
-	LastNow   int64 // monotonic FSM clock: max of every applied command's Now
+	// Playback holds each viewer's rows by file (docs/13 §10c, codec 17).
+	Playback map[string]map[Ino]*PlayRow
+	Applied  uint64
+	LastNow  int64 // monotonic FSM clock: max of every applied command's Now
 }
 
 // SnapID identifies a snapshot; allocated from State.NextSnap, never reused, never 0.
@@ -428,6 +430,7 @@ func NewState() *State {
 		Grants:   map[GrantKey]*Grant{},
 		Invites:  map[[32]byte]*Invite{},
 		Sessions: map[[32]byte]*Session{},
+		Playback: map[string]map[Ino]*PlayRow{},
 	}
 }
 
@@ -523,6 +526,7 @@ func (s *State) Clone() *State {
 		Grants:      make(map[GrantKey]*Grant, len(s.Grants)),
 		Invites:     make(map[[32]byte]*Invite, len(s.Invites)),
 		Sessions:    make(map[[32]byte]*Session, len(s.Sessions)),
+		Playback:    clonePlayback(s.Playback),
 	}
 	for idx, u := range s.Users {
 		cp := *u

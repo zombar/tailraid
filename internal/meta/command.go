@@ -43,6 +43,7 @@ const (
 	OpSession Op = 32 // {Delete, All, Hash, User, Key, ExpiresAt, Now}: a browser session of the volume (I-354)
 
 	OpSnapshotHeal Op = 33 // {ID, Missing, Now}: an incomplete snapshot's missing count falls (docs/16 §5, codec 15)
+	OpPlayback     Op = 34 // {Viewer, Action, Inos, Pos, Dur, On, Now}: a viewer's playback rows (docs/13 §10c, codec 17)
 )
 
 // commandVersion is the codec version of a log entry. Version 2 is written only for a
@@ -77,6 +78,12 @@ const (
 	// commandVersionV16: a Commit with Attrs (docs/04 §6, I-401); an older binary would
 	// misparse the fields.
 	commandVersionV16 = 16
+	// commandVersionV17: Playback (docs/13 §10c, I-406); an older binary does not know
+	// the op.
+	commandVersionV17 = 17
+	// CodecPlayback is the codec every live member must read before the web gateway
+	// proposes a playback report (docs/02 §Codec versions).
+	CodecPlayback = commandVersionV17
 	// CodecAttrs is the codec every live member must read before a flush's Commit carries
 	// a client's attributes (docs/02 §Codec versions).
 	CodecAttrs = commandVersionV16
@@ -108,7 +115,7 @@ const (
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 16
+	CodecVersion = 17
 )
 
 // SetAttr mask bits.
@@ -372,6 +379,7 @@ type Command struct {
 	SnapshotDelete *SnapshotDelete
 	SnapshotImport *SnapshotImport
 	SnapshotHeal   *SnapshotHeal // codec 15
+	Playback       *Playback     // codec 17
 	// docs/19, codec 11
 	SecretKeyInit *SecretKeyInit
 	SecretPut     *SecretPut
@@ -450,6 +458,9 @@ const commitAttrMask = AttrMode | AttrUid | AttrGid | AttrAtime | AttrMtime
 
 // needsV16 reports whether c is a Commit carrying a client's attributes (I-401).
 func needsV16(c Command) bool { return c.Op == OpCommit && c.Commit != nil && c.Commit.Attrs.Mask != 0 }
+
+// needsV17 reports whether c is a playback report (docs/13 §10c, I-406).
+func needsV17(c Command) bool { return c.Op == OpPlayback }
 
 // needsV15 reports whether c is a snapshot heal (docs/16 §5): an older binary cannot
 // decode the op, so the leader refuses it while such a member is live (I-391).
@@ -551,6 +562,8 @@ func baseCodec(c Command) uint8 {
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
+	case needsV17(c):
+		return commandVersionV17
 	case needsV16(c):
 		return commandVersionV16
 	case needsV15(c):
@@ -796,6 +809,8 @@ func encodeBody(w *writer, c Command, v uint8) {
 		w.u32(uint32(p.ID))
 		w.u32(p.Missing)
 		w.i64(p.Now)
+	case OpPlayback:
+		writePlaybackPayload(w, mustPayload(c.Playback, c.Op))
 	case OpSecretKeyInit:
 		p := mustPayload(c.SecretKeyInit, c.Op)
 		w.b = append(w.b, p.ID[:]...)
@@ -838,7 +853,7 @@ func DecodeCommand(b []byte) (Command, error) {
 		c.System = r.bool()
 		v = r.u8()
 	}
-	if r.err == nil && (v < commandVersion || v > commandVersionV16 || v == 12 || v == 13 || (v == commandVersionV14 && !wrapped)) { // 12 is sealed S3's, never written yet; 13 was the withdrawn mesh
+	if r.err == nil && (v < commandVersion || v > commandVersionV17 || v == 12 || v == 13 || (v == commandVersionV14 && !wrapped)) { // 12 is sealed S3's, never written yet; 13 was the withdrawn mesh
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -875,11 +890,13 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = c.Op == OpSnapshotHeal
 	case commandVersionV16:
 		legal = c.Op == OpCommit
+	case commandVersionV17:
+		legal = c.Op == OpPlayback
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums &&
 			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete && c.Op != OpSnapshotImport &&
 			c.Op != OpSecretKeyInit && c.Op != OpSecretPut && c.Op != OpSecretDelete &&
-			c.Op != OpSnapshotHeal && !isUsersOp(c.Op)
+			c.Op != OpSnapshotHeal && c.Op != OpPlayback && !isUsersOp(c.Op)
 	}
 	if !legal {
 		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
@@ -1006,6 +1023,8 @@ func DecodeCommand(b []byte) (Command, error) {
 			Mirror: NodeIdx(r.u16()), After: SnapID(r.u32()), Name: r.str(), At: r.i64(), Auto: r.bool(), Root: r.hash(),
 			Files: r.u64(), Bytes: r.u64(), NewBytes: r.u64(), Missing: r.u32(), Now: r.i64(),
 		}
+	case OpPlayback:
+		c.Playback = readPlaybackPayload(r)
 	case OpSnapshotHeal:
 		c.SnapshotHeal = &SnapshotHeal{ID: SnapID(r.u32()), Missing: r.u32(), Now: r.i64()}
 	case OpSecretKeyInit:
