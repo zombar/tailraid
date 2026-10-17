@@ -566,6 +566,21 @@ slot away from home on a non-voter until the gate moves it, I-295),
   file's mode and times at once; after the idle flush every file reads back exact on
   another gateway with the mode, owner and times the copy set; a SETATTR that changes
   nothing on a clean file proposes nothing (I-401..I-403).
+  35 watching and media search (docs/13 §10c, §10d, docs/18 §6a, `watchphase.go`, run
+  after 21, needs `Env.WebURL` and a movies and a tv library the phase makes with
+  sidecars naming actors, directors and genres): a position reported through one gateway's
+  `POST /api/playback` every 15 s of a fake play reads back on every other gateway's `GET
+  /api/playback` and in its Continue watching within the coalescing window plus the
+  replication wait (I-408, I-409); a position past the watched mark ticks the film and drops
+  it from the row; an episode watched puts the next one in the row as `next_up`, across a
+  season's end; Mark season watched and unwatched land on every gateway; a second viewer
+  (a second user on a users cluster, else the phase records the isolation check skipped)
+  sees none of the first's rows (I-407); the file purged takes its rows with it (I-405); a
+  table of media queries (`actor:`, `director:`, `genre:`, `year:199x`, a bare word, a
+  quoted phrase, a malformed one) answers the same items on every gateway in both scopes
+  and the 400 with its offset (I-411, I-412), and the suggestions for a prefix match the
+  table (I-413). The report charts the proposals per minute the playback cost and lists
+  the query table with each gateway's answer time.
   **Users first** (`make soak SOAK_FLAGS=-users-first`, `Run.UsersFirst`): a real volume
   has its first admin from `init`, so a run can put phase 0 before phase 1: the admin
   made as phase 28 makes them, the driver's mount uid and SMB account bound to them on
