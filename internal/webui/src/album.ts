@@ -145,7 +145,7 @@ export function trackNo(name: string): number {
 }
 
 /** duration asks the browser for a file's length through a metadata-only load. */
-function duration(src: string): Promise<number | undefined> {
+export function duration(src: string): Promise<number | undefined> {
   return new Promise((resolve) => {
     const a = document.createElement("audio");
     a.preload = "metadata";

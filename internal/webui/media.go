@@ -85,6 +85,15 @@ type MediaItem struct {
 	Seasons    []MediaSeason `json:"seasons,omitempty"`
 	Tracks     []string      `json:"tracks,omitempty"` // an album's audio files, by name
 	Catalogued bool          `json:"catalogued"`       // false: named from the tree only, until the next pass
+	// the viewer's state (docs/13 §10c, I-410)
+	Progress  *Progress   `json:"progress,omitempty"`   // a film's, an episode's or a long track's row
+	Watched   bool        `json:"watched,omitempty"`    // a show: every episode of its numbered seasons
+	Next      string      `json:"next,omitempty"`       // a show: the episode its Play starts
+	Plays     int         `json:"plays,omitempty"`      // an album: the plays of its tracks
+	NextUp    bool        `json:"next_up,omitempty"`    // Continue watching: the episode after one watched
+	Show      string      `json:"show,omitempty"`       // Continue watching: an episode's show
+	Album     string      `json:"album,omitempty"`      // Continue watching: a track's album
+	TrackPlay []TrackPlay `json:"track_play,omitempty"` // an album's tracks with rows
 }
 
 // MediaSeason is one season of a show and its episodes.
@@ -95,16 +104,17 @@ type MediaSeason struct {
 	Episodes []MediaItem `json:"episodes"`
 }
 
-// mediaView is one request's view: the catalogue by inode.
+// mediaView is one request's view: the catalogue by inode and the viewer's rows.
 type mediaView struct {
-	s   *Server
-	r   *http.Request // the request: its user's Read decides what the view lists (I-355)
-	cat map[meta.Ino]search.Entry
+	s    *Server
+	r    *http.Request // the request: its user's Read decides what the view lists (I-355)
+	cat  map[meta.Ino]search.Entry
+	play playState
 }
 
 func (s *Server) mediaView(r *http.Request) mediaView {
 	ctx := r.Context()
-	v := mediaView{s: s, r: r, cat: map[meta.Ino]search.Entry{}}
+	v := mediaView{s: s, r: r, cat: map[meta.Ino]search.Entry{}, play: s.playState(r)}
 	if s.o.Catalog != nil {
 		if es, err := s.o.Catalog.Catalog(ctx); err == nil {
 			for i := range es {
@@ -120,6 +130,8 @@ func (s *Server) media(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	v := s.mediaView(r)
 	switch {
+	case q.Has("continue"):
+		s.continueRow(w, v)
 	case q.Has("item"):
 		s.mediaItem(w, r, v)
 	case q.Has("lib"):
@@ -286,8 +298,13 @@ func (s *Server) mediaLib(w http.ResponseWriter, r *http.Request, v mediaView) {
 	order := q.Get("sort")
 	switch order {
 	case "", "title", "year", "added":
+	case "played":
+		if in.Library() != meta.LibraryMusic {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("media: sort %q: only a music library", order))
+			return
+		}
 	default:
-		writeErr(w, http.StatusBadRequest, fmt.Sprintf("media: sort %q: want title, year or added", order))
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("media: sort %q: want title, year, added or played", order))
 		return
 	}
 	kind := in.Library()
@@ -342,9 +359,18 @@ func (s *Server) mediaLib(w http.ResponseWriter, r *http.Request, v mediaView) {
 		case meta.LibraryNone, meta.LibraryRoms: // a roms library's items are its platforms, below
 		}
 	}
+	for i := range items {
+		if items[i].Kind != "show" { // a show is decorated with its folders (showItem)
+			v.decorate(&items[i], nil)
+		}
+	}
 	sort.SliceStable(items, func(i, j int) bool {
 		a, b := &items[i], &items[j]
 		switch order {
+		case "played":
+			if a.Plays != b.Plays {
+				return a.Plays > b.Plays
+			}
 		case "year":
 			if a.Year != b.Year {
 				return a.Year > b.Year
@@ -382,6 +408,15 @@ func (s *Server) mediaItem(w http.ResponseWriter, r *http.Request, v mediaView) 
 	}
 	_, _, lib := s.effective(t.in)
 	in, p := t.in, t.canonical
+	if lib == meta.LibraryTV && in.Type == meta.TFile { // an episode answers its show (docs/13 §10a)
+		show, ok := v.showOf(in)
+		sp, err := s.o.Store.PathOf(show.Ino)
+		if !ok || err != nil {
+			writeErr(w, http.StatusNotFound, "media "+p+": not an episode of a show")
+			return
+		}
+		in, p = show, "/"+strings.Join(sp, "/")
+	}
 	var it MediaItem
 	switch {
 	case lib == meta.LibraryMovies:
@@ -392,11 +427,17 @@ func (s *Server) mediaItem(w http.ResponseWriter, r *http.Request, v mediaView) 
 				v.video(&it)
 			}
 		}
+		v.decorate(&it, nil)
 	case lib == meta.LibraryTV && in.Type == meta.TDir:
 		group := v.showGroup(in.Parent, &in)
 		it = v.showItem(group, path.Dir(p))
 		it.Seasons = v.seasons(group)
 		it.Children = len(it.Seasons)
+		for i := range it.Seasons {
+			for j := range it.Seasons[i].Episodes {
+				v.decorate(&it.Seasons[i].Episodes[j], nil)
+			}
+		}
 	case lib == meta.LibraryRoms:
 		var ok bool
 		if it, ok = v.romItem(in, p); !ok {
@@ -407,6 +448,8 @@ func (s *Server) mediaItem(w http.ResponseWriter, r *http.Request, v mediaView) 
 		tracks, _ := v.album(in.Ino)
 		it = v.item(in, p, "album")
 		it.Tracks, it.Children = tracks, len(tracks)
+		v.decorate(&it, nil)
+		it.TrackPlay = v.trackPlays(in.Ino)
 	default:
 		writeErr(w, http.StatusNotFound, "media "+p+": not an item of a library")
 		return
@@ -467,6 +510,7 @@ func (v mediaView) showItem(group []showDir, libPath string) MediaItem {
 			v.video(&it)
 		}
 	}
+	v.decorate(&it, group)
 	return it
 }
 

@@ -110,3 +110,22 @@ func (f *FS) SetFlags(filename string, flags uint8) error {
 	_, err = f.propose(context.Background(), meta.Command{Op: meta.OpSetAttr, SetAttr: &meta.SetAttr{Ino: in.Ino, Mask: meta.AttrFlags, Flags: flags, Now: f.now()}})
 	return err
 }
+
+// Playback proposes a viewer's playback report or action (docs/13 §10c, op 34). It is
+// codec 17: until every live member reads it the gateway answers ErrCodec itself.
+func (f *FS) Playback(ctx context.Context, p meta.Playback) error {
+	if err := f.PlaybackReady(); err != nil {
+		return err
+	}
+	p.Now = f.now()
+	_, err := f.propose(ctx, meta.Command{Op: meta.OpPlayback, Playback: &p})
+	return err
+}
+
+// PlaybackReady is ErrCodec until every live member reads codec 17.
+func (f *FS) PlaybackReady() error {
+	if !f.codecAtLeast(meta.CodecPlayback) {
+		return fmt.Errorf("vfs: playback needs every member at codec %d: %w", meta.CodecPlayback, meta.ErrCodec)
+	}
+	return nil
+}

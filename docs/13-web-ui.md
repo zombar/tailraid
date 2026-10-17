@@ -171,7 +171,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /api/media?item=&in=` | – | one item with `plot`, `people`, `seasons:[{n,poster?,episodes:[…]}]` for a show or `tracks` (through the tags of §6) for an album, with `track_play:[{name,plays,progress?}]` for the tracks the viewer has rows for; `in=` reads a deleted root as `ls` does |
 | `GET /api/media?continue=1` | – | `{"items":[…]}`: the viewer's Continue watching row (§10c, I-409), at most `ContinueMax` (20) items newest first, each with `progress` or `next_up`; no viewer → an empty list |
 | `GET /api/playback?path=` | – | `{"pos","dur","watched","plays","hidden","at","on"}`: the viewer's row for a file (§10c); no row → 404; no viewer → 404 |
-| `POST /api/playback` `{"path","pos","dur","final"?}`, `{"path","played":true}`, `{"paths":[…],"action":"watched"\|"unwatched"}` or `{"path","action":"hide"}` | required | 204; the viewer is the request's (§10c, I-407), the body never names one; a position within `PlaybackEvery` of the last one proposed for the pair and not `final` is kept and proposed later, still 204 (I-408); a path that is not a live file → 404 (for a batch, per item in `{"failed":[…]}` with 200); no viewer → 403; a user without Read on the file → 403; a member too old for codec 17 → 503 `Retry-After: 30`; at most `MaxBatch` paths |
+| `POST /api/playback` `{"path","pos","dur","final"?}`, `{"path","played":true}`, `{"paths":[…],"action":"watched"\|"unwatched"}` or `{"path","action":"hide"}` | required | 204; the viewer is the request's (§10c, I-407), the body never names one; a position within `PlaybackEvery` of the last one proposed for the pair and not `final` is dropped, still 204 (I-408); a path that is not a live file → 404 (for a batch, per item in `{"failed":[…]}` with 200); no viewer → 403; a user without Read on the file → 403; a member too old for codec 17 → 503 `Retry-After: 30`; at most `MaxBatch` paths |
 | `GET /api/snapshots` | – | `{"mirrors":[{id,name,host,self,path?,online,reason?,used,free,total,last_seen?,warn?,syncing?:{id,snapshot,read,total,bytes_new}}],"snapshots":[{id,mirror,name,at,auto,state,files,bytes,new_bytes,missing}],"schedule":{every,hourly,daily,weekly,monthly,next?}}`, snapshots newest first, from the catalogue: offline mirrors' snapshots included (docs/16 §5); a mirror's `name` is its directory under `/.snapshots` (`pike-m1`), its state from the probes (docs/16 §1); `warn` says why its card warns (`stale`, `reserve`, `incomplete`); `schedule` is this node's `mirrors` config, `next` when the newest automatic snapshot on an online mirror falls due |
 | `POST /api/snapshot` `{"name"?,"mirror"?}` | required | 201 the begun rows (one per online mirror, or the one named); the serving gateway flushes its dirty files first; a taken name or a mirror already syncing → 409; an offline mirror → 409 `{"error","offline":true}`; a member too old for codec 7 → 503 |
 | `GET /api/versions?path=` | – | `{"versions":[{key,size,mtime,snapshots:[{id,mirror,name}],current}],"offline":[{mirror,count}]}`: the file's distinct contents on the online mirrors, newest first, the live one `current` with the snapshots holding it (possibly none); `offline` counts what the offline mirrors would add |
@@ -677,8 +677,10 @@ The page reports, through `POST /api/playback`:
 | Remove from Continue watching | `{path, action: "hide"}` |
 
 The node proposes a position for a `(viewer, file)` at most once per `PlaybackEvery`
-(10 s), keeping the newest and dropping the rest, but every `final`, `played` and action
-at once (I-408). The leader's apply derives everything else (I-405): a position is
+(10 s) and drops a report that comes sooner (the page reports every 15 s, so only the
+extra reports of a seek are dropped), but proposes every `final`, `played` and action at
+once (I-408); a report a codec-16 cluster would refuse is answered 503 whether it would
+have been dropped or not. The leader's apply derives everything else (I-405): a position is
 clamped to `[0, dur]`; the row is **watched** once `pos ≥ 0.9 · dur`, or `dur > 30 min`
 and `pos ≥ dur − 5 min`, and stays so until marked unwatched; a later position below the
 mark on a watched row starts a rewatch (watched stays, the position is kept); hidden is
@@ -1370,9 +1372,9 @@ placement gives way to legible text: the dashed line keeps the event's true time
   writes none (403); with users, a file the user may not read is 403 and none of its rows
   is listed.
 - **I-408** — The node proposes a position for one `(viewer, file)` at most once per
-  `PlaybackEvery`, keeping the newest report and proposing it when the window closes
-  unless a newer one came; a `final` position, a `played` report and every action are
-  proposed at once; a report the leader refuses is answered with its status, never 204.
+  `PlaybackEvery` and drops one reported sooner; a `final` position, a `played` report
+  and every action are proposed at once; a report the gateway or the leader refuses is
+  answered with its status, never 204.
 - **I-409** — `GET /api/media?continue=1` lists at most `ContinueMax` items newest first by
   row time: every live file of the viewer's rows under a library that is not watched, not
   hidden and at least 60 s in (a track only when it is longer than 20 min), and for every
@@ -1459,11 +1461,11 @@ placement gives way to legible text: the dashed line keeps the event's true time
 | I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
 | I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |
 | I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_ShowStill`, `TestWebUI_Media_ShowSplitAcrossFolders`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
-| I-407 | stub until `media-viewer-web`: the viewer from the session or the login, none without either, Read for a user, only the viewer's rows |
-| I-408 | stub until `media-viewer-web`: the coalescing window table, final and actions at once, a refusal answered with its status |
-| I-409 | stub until `media-viewer-web`: the Continue watching table, next up across a season's end, the trash and an unflagged library dropping out, N-node determinism |
-| I-410 | stub until `media-viewer-web`: the progress fields per kind, a show's watched and next, sort played, an album's track plays |
-| I-414 | stub until `media-viewer-web`: the class agreement of the static test, no media route to the file view; the fullscreen flow is manual checks 28–30 |
+| I-407 | `TestWebUI_Playback_ViewerFromRequest_Table`, `TestWebUI_Playback_UserNeedsRead`, `TestWebUI_Playback_RowsAreTheViewers` |
+| I-408 | `TestWebUI_Playback_Coalesce_Table`, `TestWebUI_Playback_FinalAndActionsAtOnce`, `TestWebUI_Playback_RefusalIsStatus` |
+| I-409 | `TestWebUI_Continue_Table`, `TestWebUI_Continue_NextUpAcrossSeason`, `TestWebUI_Continue_TrashAndUnflaggedDrop`, `TestWebUI_Continue_DeterministicAcrossNodes` |
+| I-410 | `TestWebUI_Media_ProgressFields_Table`, `TestWebUI_Media_ShowWatchedAndNext`, `TestWebUI_Media_SortPlayed`, `TestWebUI_Media_AlbumTrackPlays`, `TestWebUI_Continue_DeterministicAcrossNodes` |
+| I-414 | `TestStatic_MediaRoutesNeverFileRoute`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` (the fullscreen flow and the overlays are manual checks 28–30) |
 | I-297 | `TestChart_MarkLabels_Lane_Table`, `TestChart_Line_MarkLabelsBelowAxis_HeightFixed` |
 | I-283 | `TestCSS_ColoursOnlyInTokens`, `TestCSS_HasColour_Table` |
 | I-284 | `TestCSS_ThemesDefineTheSameTokens` |

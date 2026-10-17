@@ -8,6 +8,7 @@ import { icon, type IconName } from "./icons.ts";
 import { fileURL, tags, thumbURL, type Src } from "./api.ts";
 import { fetchThumb } from "./thumbs.ts";
 import { basename, ext, mmss, session } from "./util.ts";
+import { LONG_TRACK, watch } from "./watch.ts";
 
 export interface Track {
   path: string;
@@ -49,6 +50,7 @@ class Player {
   private coverFor = ""; // the thumbnail URL the bar's cover shows or is fetching
   private coverSrc = ""; // its picture as an object URL, once it came
   private saveTimer = 0;
+  private unwatch: (() => void) | null = null; // ends the current track's playback reports (docs/13 §10c)
 
   current(): Track | null {
     return this.index >= 0 ? (this.queue[this.index] ?? null) : null;
@@ -99,14 +101,19 @@ class Player {
     this.notify();
   }
 
-  /** play starts the queue at index. */
-  play(tracks: Track[], index = 0): void {
+  /** play starts the queue at index, at pos seconds into that track (a long track's resume point). */
+  play(tracks: Track[], index = 0, pos = 0): void {
     if (!tracks.length) return;
     this.queue = tracks.slice();
     this.index = Math.max(0, Math.min(index, tracks.length - 1));
     this.seed = (Date.now() % 2147483647) || 1;
     this.reshuffle();
-    this.load(this.index, true);
+    this.load(this.index, true, pos);
+  }
+
+  /** position is where the current track is and how long it is, in seconds. */
+  position(): { cur: number; dur: number } {
+    return { cur: this.a.currentTime || 0, dur: Number.isFinite(this.a.duration) ? this.a.duration : (this.current()?.dur ?? 0) };
   }
 
   /** enqueue appends tracks; with nothing playing it starts them. */
@@ -198,6 +205,8 @@ class Player {
   }
 
   clear(): void {
+    this.unwatch?.();
+    this.unwatch = null;
     this.a.pause();
     this.a.removeAttribute("src");
     this.a.load();
@@ -236,6 +245,8 @@ class Player {
   private load(i: number, start: boolean, pos = 0): void {
     const t = this.queue[i];
     if (!t) return;
+    this.unwatch?.(); // the last track's final report, before its element changes
+    this.unwatch = null;
     this.index = i;
     if (this.preloaded === i && this.b.src) {
       [this.a, this.b] = [this.b, this.a];
@@ -245,6 +256,9 @@ class Player {
     }
     this.preloaded = -1;
     this.b.removeAttribute("src");
+    const el = this.a;
+    // every live track counts its plays, a long one keeps its position (docs/13 §10c)
+    this.unwatch = t.root === undefined ? watch(el, t.path, { positions: () => el.duration * 1000 > LONG_TRACK, plays: true }) : null;
     if (pos > 0) this.a.currentTime = pos;
     if (start) void this.a.play().catch(() => undefined);
     void this.describe(t);
@@ -421,11 +435,13 @@ class Player {
     const close = iconBtn("close", "close the player", () => this.clear()); // stop and empty the queue, as Clear does
     close.classList.add("close");
     const queueBtn = h("button", { type: "button", class: "queue-btn", "aria-pressed": "false", onClick: () => { this.bar?.classList.toggle("expanded"); this.notify(); } }, icon("queue_music"), h("span", null, "Queue"));
+    const nowView = () => (location.hash = "#/media/now"); // the now-playing view (docs/13 §10b)
+    cover.addEventListener("click", nowView);
     const bar = h(
       "aside",
       { class: "nowbar", hidden: true },
       cover,
-      h("div", { class: "titles" }, title, sub),
+      h("div", { class: "titles", onClick: nowView }, title, sub),
       h("div", { class: "transport" }, prev, playBtn, next),
       h("div", { class: "seek" }, seek, time),
       h("div", { class: "modes" }, repeat, shuffle),

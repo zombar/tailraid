@@ -775,7 +775,10 @@ section.continue h2 .count { color: var(--dim); font-weight: 400; font-size: 13p
    shares the header's layer and comes after it in the page, so it covers it; it stops above the
    now-playing bar, which stays in reach under an album */
 .mviewer { --mv-bottom: 0px; position: fixed; inset: 0 0 var(--mv-bottom); z-index: 5; overflow-y: auto; background: var(--media-bg); color: var(--text); display: grid; align-content: start; }
-body:has(aside.nowbar:not([hidden])) .mviewer { --mv-bottom: calc(var(--nowbar-h) + env(safe-area-inset-bottom, 0px)); }
+body.modal-open { overflow: hidden; } /* the page under the viewer keeps its scroll */
+/* the now-playing view stands in for the bar while it is open */
+body.now-open aside.nowbar, body.now-open .queue { display: none; }
+body:not(.now-open):has(aside.nowbar:not([hidden])) .mviewer { --mv-bottom: calc(var(--nowbar-h) + env(safe-area-inset-bottom, 0px)); }
 .mviewer > img.mbackdrop { position: fixed; top: 0; left: 0; width: 100%; height: calc(100% - var(--mv-bottom)); object-fit: cover; filter: blur(32px) brightness(.35); transform: scale(1.1); pointer-events: none; }
 .mbar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--gutter); background: linear-gradient(var(--overlay), transparent); }
 .mbar a.back { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: 48px; padding: 0 var(--sp-3) 0 var(--sp-2); border-radius: var(--radius); color: var(--text); font: 600 15px var(--mono); }
@@ -793,6 +796,10 @@ body:has(aside.nowbar:not([hidden])) .mviewer { --mv-bottom: calc(var(--nowbar-h
 .mscreen.fs { max-height: none; border-radius: 0; }
 .fs-top { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4) var(--sp-8); background: linear-gradient(var(--overlay), transparent); color: var(--on-status); }
 .fs-top .icon-btn { background: transparent; border-color: transparent; color: var(--on-status); }
+/* the title and the way out show only in fullscreen, and fade with the browser's controls */
+.mscreen:not(.fs) > .fs-top, .mscreen.fs > .fs-btn { display: none; }
+.fs-top { transition: opacity .3s; }
+.mscreen.fs.idle > .fs-top { opacity: 0; pointer-events: none; }
 .fs-top .fs-name { display: grid; font: 600 15px var(--mono); }
 .fs-top .fs-name .small { font-weight: 400; opacity: .8; }
 /* the up-next card in the screen's bottom right, its countdown ring drawn by --p */

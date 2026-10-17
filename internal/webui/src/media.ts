@@ -1,14 +1,19 @@
-// The Media tab (docs/13 §10, I-212): one section per library folder, films and shows by
-// poster and albums by cover, and a detail page with the backdrop, facts, plot, people
-// and, for a show, its seasons and episodes. The node lists the structure live and
-// fills in the catalogue's metadata; a film without sidecars shows its cleaned name and
-// the browser-made frame. Routes: #/media and #/media/item/<path>.
+// The Media tab (docs/13 §10, I-212): its own search (§10d), the viewer's Continue
+// watching row (§10c), one section per library folder, films and shows by poster and
+// albums by cover, and a detail page with the backdrop, facts, plot, people and, for a
+// show, its seasons and episodes. The node lists the structure live and fills in the
+// catalogue's metadata; a film without sidecars shows its cleaned name and the
+// browser-made frame. Routes: #/media, #/media?q=<query> and #/media/item/<path>; Play
+// opens the viewer (viewer.ts) over the tab.
 
-import { clear, h, titleCard } from "./dom.ts";
+import { clear, h, titleCard, toast } from "./dom.ts";
 import { icon } from "./icons.ts";
-import { fileURL, media, mediaItem, thumbURL, type MediaFile, type MediaItem, type MediaLibrary } from "./api.ts";
+import { continueRow, fileURL, media, mediaItem, mediaSearch, report, suggest, thumbURL, type MediaFile, type MediaItem, type MediaLibrary, type Progress } from "./api.ts";
 import { lazy, lazyURL } from "./thumbs.ts";
-import { basename, browseHash, bytes, count, dirname, encodePathForHash, fileHash, session } from "./util.ts";
+import { basename, browseHash, bytes, count, dirname, encodePathForHash, session } from "./util.ts";
+import { albumHash, markWatched, playHash, searchHash, setLibraries } from "./viewer.ts";
+import { left, resumeFrom } from "./watch.ts";
+import { player } from "./audio.ts";
 
 const NOUN: Record<string, [string, string]> = { movies: ["film", "films"], tv: ["show", "shows"], music: ["album", "albums"], roms: ["platform", "platforms"] };
 
@@ -44,7 +49,14 @@ function duration(min: number | undefined): string {
 }
 
 function itemHash(it: MediaItem): string { // a platform's and a game's pages are items like a film's
-  return it.kind === "album" ? browseHash({ path: it.path }) : "#/media/item" + encodePathForHash(it.path);
+  return it.kind === "album" ? albumHash(it.path) : "#/media/item" + encodePathForHash(it.path);
+}
+
+/** progEl is a row's progress as a 4 px bar (docs/13 §10c). */
+function progEl(p: Progress | undefined): HTMLElement {
+  const el = h("span", { class: "prog" });
+  if (p && p.dur > 0) el.style.setProperty("--p", `${Math.min(100, (p.pos / p.dur) * 100).toFixed(1)}%`);
+  return el;
 }
 
 /** art is the poster tile's picture, or the kind glyph when there is none. */
@@ -72,8 +84,9 @@ function meta(it: MediaItem): string[] {
   return [it.year ? String(it.year) : "", it.kind === "movie" && !it.runtime && !it.plot ? "no sidecar" : ""];
 }
 
-/** fact is the chip over the art's corner: a film's runtime, a show's seasons, a platform's games. */
+/** fact is the chip over the art's corner: a film's runtime, a show's seasons, a platform's games, an album's plays. */
 function fact(it: MediaItem): string {
+  if (it.kind === "album" && it.plays) return `${it.plays} ${it.plays === 1 ? "play" : "plays"}`;
   if (it.kind === "movie" && it.runtime) return duration(it.runtime);
   if (it.kind === "show" && it.children) return `${it.children} ${it.children === 1 ? "season" : "seasons"}`;
   if (it.kind === "platform") return `${it.children ?? 0} ${it.children === 1 ? "game" : "games"}`;
@@ -104,6 +117,9 @@ function posterTile(it: MediaItem): HTMLElement {
     box.append(img);
   } else missing();
   if (chip && !box.contains(chip)) box.append(chip);
+  // the viewer's state: watched a tick, started its progress along the foot (§10c)
+  if (it.progress?.watched || it.watched) box.append(h("span", { class: "ov tr" }, icon("check")));
+  else if (it.progress && it.progress.pos > 0) box.append(progEl(it.progress));
   if (veiled) {
     a.addEventListener("click", (ev) => {
       if (!a.classList.contains("nsfw")) return;
@@ -143,10 +159,10 @@ function librarySection(lib: MediaLibrary): HTMLElement {
   fold.open = !stored(key);
   const section = h("section", { class: "lib " + lib.kind }, fold);
   const grid = h("div", { class: "posters" });
-  const sorts = ["title", "year", "added"];
+  const sorts = lib.kind === "music" ? ["title", "year", "added", "played"] : ["title", "year", "added"];
   let sort = session.get(`tr.media.sort.${lib.path}`, "title");
   let items: MediaItem[] = [];
-  const buttons = sorts.map((s) => h("button", { type: "button", "aria-pressed": String(s === sort) }, s[0]!.toUpperCase() + s.slice(1)));
+  const buttons = sorts.map((s) => h("button", { type: "button", "aria-pressed": String(s === sort) }, s === "played" ? "Most played" : s[0]!.toUpperCase() + s.slice(1)));
   const draw = () => {
     clear(grid);
     for (const it of items) grid.append(posterTile(it));
@@ -188,9 +204,212 @@ function librarySection(lib: MediaLibrary): HTMLElement {
   return section;
 }
 
-function overview(root: HTMLElement): void {
+// --- the tab's own search (§10d)
+
+interface Chip {
+  field: string;
+  value: string;
+}
+
+/** splitQuery reads a query into its field chips and its free words. */
+function splitQuery(q: string): { chips: Chip[]; words: string } {
+  const chips: Chip[] = [];
+  const words: string[] = [];
+  for (const m of q.matchAll(/([a-z]+):"([^"]*)"|([a-z]+):(\S+)|(\S+)/gi)) {
+    if (m[1]) chips.push({ field: m[1].toLowerCase(), value: m[2]! });
+    else if (m[3]) chips.push({ field: m[3].toLowerCase(), value: m[4]! });
+    else words.push(m[5]!);
+  }
+  return { chips, words: words.join(" ") };
+}
+
+function joinQuery(chips: Chip[], words: string): string {
+  return [...chips.map((c) => (/\s/.test(c.value) || c.field !== "year" ? `${c.field}:"${c.value}"` : `${c.field}:${c.value}`)), words.trim()].filter(Boolean).join(" ");
+}
+
+function go(q: string): void {
+  location.hash = "#/media" + (q ? "?q=" + encodeURIComponent(q) : "");
+}
+
+/** searchField is the tab's search: chips and words in one field, suggestions under it. */
+function searchField(q: string): HTMLElement {
+  const { chips, words } = splitQuery(q);
+  const input = h("input", { type: "search", value: words, placeholder: "title, actor, director, genre, year…", "aria-label": "search the media", autocomplete: "off" }) as HTMLInputElement;
+  const field = h("label", { class: "mfield" }, icon("search"));
+  chips.forEach((c, i) => {
+    field.append(h("button", { type: "button", class: "qchip", "aria-label": `remove ${c.field} ${c.value}`, onClick: (ev: Event) => { ev.preventDefault(); go(joinQuery(chips.filter((_, j) => j !== i), input.value)); } }, h("b", null, c.field), c.value, icon("close")));
+  });
+  field.append(input);
+  const list = h("ul", { class: "msuggest", role: "listbox", hidden: true });
+  const box = h("div", { class: "msearch" }, field, list);
+  let opts: { li: HTMLElement; chip: Chip }[] = [];
+  let sel = -1;
+  let timer = 0;
+  let asked = "";
+  const mark = () => opts.forEach((o, i) => o.li.setAttribute("aria-selected", String(i === sel)));
+  const pick = (c: Chip) => {
+    const rest = input.value.trim().split(/\s+/).slice(0, -1).join(" ");
+    go(joinQuery([...chips, c], rest));
+  };
+  const ask = () => {
+    const last = input.value.trim().split(/\s+/).pop() ?? "";
+    const query = joinQuery(chips, input.value);
+    if (last.length < 2 || /:/.test(last)) {
+      list.hidden = true;
+      return;
+    }
+    asked = query;
+    suggest(query).then(
+      (res) => {
+        if (asked !== query) return;
+        clear(list);
+        opts = [];
+        sel = -1;
+        const lw = last.toLowerCase();
+        for (const g of res.groups) {
+          list.append(h("li", { class: "mgroup" }, g.field.charAt(0).toUpperCase() + g.field.slice(1) + "s"));
+          for (const v of g.values) {
+            const at = v.value.toLowerCase().indexOf(lw);
+            const label = at >= 0 ? [v.value.slice(0, at), h("mark", null, v.value.slice(at, at + lw.length)), v.value.slice(at + lw.length)] : [v.value];
+            const counts = Object.entries(v.counts).map(([k, n]) => `${n} ${k === "movie" ? (n === 1 ? "film" : "films") : n === 1 ? k : k + "s"}`).join(" · ");
+            const li = h("li", { class: "mopt", role: "option", "aria-selected": "false" }, h("span", { class: "mkind" }, g.field), h("span", null, ...label), h("span", { class: "mcount" }, counts));
+            const chip = { field: g.field, value: v.value };
+            li.addEventListener("mousedown", (ev) => {
+              ev.preventDefault();
+              pick(chip);
+            });
+            opts.push({ li, chip });
+            list.append(li);
+          }
+        }
+        list.hidden = opts.length === 0;
+      },
+      () => (list.hidden = true),
+    );
+  };
+  input.addEventListener("input", () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(ask, 150);
+  });
+  input.addEventListener("blur", () => window.setTimeout(() => (list.hidden = true), 150));
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      if (!opts.length) return;
+      ev.preventDefault();
+      sel = (sel + (ev.key === "ArrowDown" ? 1 : opts.length - 1)) % opts.length;
+      mark();
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      if (sel >= 0 && !list.hidden) pick(opts[sel]!.chip);
+      else go(joinQuery(chips, input.value));
+    } else if (ev.key === "Escape") {
+      list.hidden = true;
+    } else if (ev.key === "Backspace" && input.value === "" && chips.length) {
+      go(joinQuery(chips.slice(0, -1), ""));
+    }
+  });
+  return box;
+}
+
+const KIND_NOUN: Record<string, [string, string]> = { movie: ["film", "films"], show: ["show", "shows"], album: ["album", "albums"], game: ["game", "games"] };
+
+/** results draws a media search's hits, grouped by library (§10d). */
+function results(root: HTMLElement, q: string): void {
+  const note = h("div", { class: "mhits" }, "…");
+  root.append(note);
+  mediaSearch(q).then(
+    (res) => {
+      const byKind = new Map<string, number>();
+      let n = 0;
+      for (const lib of res.libs) for (const it of lib.items) {
+        byKind.set(it.kind, (byKind.get(it.kind) ?? 0) + 1);
+        n++;
+      }
+      if (n === 0) {
+        note.remove();
+        const { chips, words } = splitQuery(q);
+        const drop = chips.length ? h("a", { href: "#/media?q=" + encodeURIComponent(joinQuery(chips.slice(0, -1), words)) }, "Drop " + chips[chips.length - 1]!.field) : null;
+        root.append(h("div", { class: "empty" }, "No films, shows or albums match ", h("b", null, q), ". ", drop));
+        return;
+      }
+      note.textContent = [`${n} ${n === 1 ? "match" : "matches"}`, ...[...byKind].map(([k, c]) => `${c} ${(KIND_NOUN[k] ?? [k, k + "s"])[c === 1 ? 0 : 1]}`)].join(" · ");
+      for (const lib of res.libs) {
+        const grid = h("div", { class: "posters" });
+        for (const it of lib.items) grid.append(posterTile(it));
+        root.append(h("section", { class: "lib " + lib.kind }, h("h2", null, basename(lib.path) || "/", " ", h("span", { class: "badge lib" }, lib.kind), h("span", { class: "count" }, String(lib.items.length))), grid));
+      }
+    },
+    (e: unknown) => (note.textContent = "could not search: " + (e instanceof Error ? e.message : String(e))),
+  );
+}
+
+// --- Continue watching (§10c)
+
+function continueTile(it: MediaItem, drop: () => void): HTMLElement {
+  const img = h("img", { alt: "" }) as HTMLImageElement;
+  const cart = h("span", { class: "cart" }, img);
+  const miss = () => (img.style.visibility = "hidden");
+  if (it.kind === "track") lazyURL(img, thumbURL(dirname(it.path)), miss);
+  else if (!frameOf(img, it, miss)) lazyURL(img, thumbURL(it.thumb || it.video || it.path), miss); // a frame the page grabs when none is stored
+  if (it.next_up) cart.append(h("span", { class: "ov bl" }, "next up"));
+  if (it.progress) cart.append(h("span", { class: "ov br" }, left(it.progress)), progEl(it.progress));
+  let title = it.title;
+  let sub = it.year ? String(it.year) : "";
+  if (it.kind === "episode") {
+    title = it.show ?? it.title;
+    sub = `${episodeNo(it)} · ${it.next_up ? "next episode" : it.title}`;
+  } else if (it.kind === "track") {
+    title = it.album || it.title;
+    sub = [it.artist, it.title].filter(Boolean).join(" · ");
+  }
+  const href = it.kind === "track" ? "#/media/now" : playHash(it.kind === "movie" && it.video ? it.video : it.path);
+  const a = h("a", { href }, cart, h("span", { class: "ctitle", title }, title), h("span", { class: "csub" }, sub));
+  if (it.kind === "track")
+    a.addEventListener("click", () => player.play([{ path: it.path }], 0, resumeFrom(it.progress)));
+  const file = it.kind === "movie" && it.video ? it.video : it.path;
+  const act = (action: "watched" | "hide") => {
+    const done = action === "watched" ? markWatched([file], true) : report({ path: file, action: "hide" });
+    done.then(drop, (e: unknown) => toast(String(e instanceof Error ? e.message : e), "bad"));
+  };
+  const menu = h(
+    "details",
+    { class: "menu" },
+    h("summary", { "aria-label": "more", title: "more" }, icon("more_vert")),
+    h("div", { class: "menu-body" }, h("button", { type: "button", class: "menu-row", onClick: () => act("watched") }, h("span", null, "Mark watched")), h("button", { type: "button", class: "menu-row", onClick: () => act("hide") }, h("span", null, "Remove from Continue watching"))),
+  );
+  return h("div", { class: "ctile" }, a, menu);
+}
+
+function continueSection(root: HTMLElement): void {
+  const row = h("div", { class: "crow" });
+  const countEl = h("span", { class: "count" });
+  const section = h("section", { class: "continue", hidden: true }, h("h2", null, "Continue watching", countEl), row);
+  root.append(section);
+  continueRow().then(
+    (res) => {
+      const draw = (items: MediaItem[]) => {
+        clear(row);
+        countEl.textContent = String(items.length);
+        section.hidden = items.length === 0; // absent while empty
+        items.forEach((it, i) => row.append(continueTile(it, () => draw(items.filter((_, j) => j !== i)))));
+      };
+      draw(res.items);
+    },
+    () => undefined, // no viewer, or an older node: the tab without the row
+  );
+}
+
+function overview(root: HTMLElement, query: string): void {
+  const q = new URLSearchParams(query).get("q") ?? "";
+  root.append(h("section", null, searchField(q)));
+  if (q) {
+    results(root, q);
+    return;
+  }
+  continueSection(root);
   media().then(
     (res) => {
+      setLibraries(res.libs);
       if (res.libs.length === 0) {
         root.append(
           h(
@@ -333,16 +552,34 @@ function detail(root: HTMLElement, path: string): void {
         const sidecar = it.kind === "show" ? "tvshow.nfo" : it.path.includes(".") && it.video === it.path ? basename(it.path).replace(/\.[^.]+$/, "") + ".nfo" : "movie.nfo";
         body.append(h("p", { class: "plot dim" }, "No description: add a ", h("code", null, sidecar), it.kind === "show" ? " to the show's folder." : " beside the file."));
       }
+      const all = seasons.flatMap((s) => s.episodes);
       const first = seasons.find((s) => s.n > 0)?.episodes[0] ?? seasons[0]?.episodes[0];
-      const play = h("button", { type: "button" }, icon("play_arrow_fill"), it.kind === "show" && first ? `Play ${episodeNo(first)}` : "Play");
-      const target = it.kind === "show" ? first?.path : it.video;
-      if (target) play.addEventListener("click", () => (location.hash = fileHash({ path: target })));
+      // Play is the viewer's next (§10c): the episode in progress or after the last watched
+      const next = it.kind === "show" ? (all.find((e) => e.path === it.next) ?? first) : undefined;
+      const prog = it.kind === "show" ? next?.progress : it.progress;
+      const from = resumeFrom(prog);
+      const target = it.kind === "show" ? next?.path : it.video ? it.path : undefined;
+      const label = it.kind === "show" && next ? (from ? `Resume ${episodeNo(next)} · ${left(prog!)}` : `Play ${episodeNo(next)}`) : from ? `Resume · ${left(prog!)}` : prog?.watched ? "Play again" : "Play";
+      const play = h("button", { type: "button", class: from ? "primary" : "" }, icon("play_arrow_fill"), label);
+      if (target) play.addEventListener("click", () => (location.hash = playHash(target)));
       else (play as HTMLButtonElement).disabled = true;
       const folder = it.video === it.path ? dirname(it.path) : it.path;
-      body.append(h("div", { class: "actions" }, play, h("a", { class: "btn", href: browseHash({ path: folder }) }, "Open folder")));
+      const actions = h("div", { class: "actions" }, play);
+      if (from && target && it.kind !== "show") {
+        const file = it.video!;
+        actions.append(
+          h("button", { type: "button", onClick: () => { void markWatched([file], false).then(() => (location.hash = playHash(target))); } }, icon("replay"), "Start over"),
+        );
+      }
+      actions.append(h("a", { class: "btn", href: browseHash({ path: folder }) }, "Open folder"));
+      body.append(actions);
+      if (from && it.kind !== "show") body.append(progEl(prog));
       if (it.people?.length) {
         const people = h("div", { class: "people" });
-        it.people.forEach((p, i) => people.append(h("span", { class: "person" }, i === 0 && it.kind === "movie" && it.people!.length > 1 ? `${p} · director` : p)));
+        const dirs = it.directors ?? 0;
+        it.people.forEach((p, i) =>
+          people.append(i < dirs ? h("a", { class: "person", href: searchHash("director", p) }, p, h("span", { class: "small dim" }, "director")) : h("a", { class: "person", href: searchHash("actor", p) }, p)),
+        );
         body.append(people);
       }
       if (seasons.length > 0) {
@@ -363,20 +600,43 @@ function detail(root: HTMLElement, path: string): void {
               img.addEventListener("error", miss);
             }
             thumb.append(img);
-            const title = h("td", { class: "title" }, e.title);
+            const title = h("td", { class: "title" });
+            if (e.progress?.watched) title.append(icon("check"));
+            title.append(e.title);
             if (e.plot) title.append(h("div", { class: "plot small dim" }, e.plot));
-            const row = h("tr", null, h("td", { class: "no" }, episodeNo(e)), thumb, title, h("td", { class: "dur" }, duration(e.runtime)));
-            row.addEventListener("click", () => (location.hash = fileHash({ path: e.path })));
+            if (e.progress && !e.progress.watched && e.progress.pos > 0) title.append(progEl(e.progress));
+            const row = h("tr", { class: e.progress?.watched ? "watched" : "" }, h("td", { class: "no" }, episodeNo(e)), thumb, title, h("td", { class: "dur" }, duration(e.runtime)));
+            row.addEventListener("click", () => (location.hash = playHash(e.path)));
             tbody.append(row);
           }
         };
+        let shown = 0;
         seasons.forEach((s, i) => {
           const b = h("button", { type: "button", "aria-pressed": "false" }, s.title);
-          b.addEventListener("click", () => show(i));
+          b.addEventListener("click", () => {
+            shown = i;
+            show(i);
+            seasonLabel.textContent = seasons[i]!.title;
+          });
           strip.append(b);
         });
+        // the season menu marks the shown season watched or unwatched (§10c)
+        const seasonLabel = h("span", null, "");
+        const mark = (watched: boolean) => {
+          void markWatched(seasons[shown]!.episodes.map((e) => e.path), watched).then(
+            () => {
+              clear(root);
+              detail(root, path);
+            },
+            (e: unknown) => toast(String(e instanceof Error ? e.message : e), "bad"),
+          );
+        };
+        const menu = h("details", { class: "menu" }, h("summary", null, seasonLabel), h("div", { class: "menu-body" }, h("button", { type: "button", class: "menu-row", onClick: () => mark(true) }, h("span", null, "Mark season watched")), h("button", { type: "button", class: "menu-row", onClick: () => mark(false) }, h("span", null, "Mark season unwatched"))));
+        actions.insertBefore(menu, actions.lastElementChild);
         body.append(strip, table);
-        show(Math.max(0, seasons.findIndex((s) => s.n > 0)));
+        shown = Math.max(0, next ? seasons.findIndex((s) => s.episodes.some((e) => e.path === next.path)) : seasons.findIndex((s) => s.n > 0));
+        show(shown);
+        seasonLabel.textContent = seasons[shown]?.title ?? "";
       }
       section.append(h("div", { class: "hero-body" }, poster, body));
       if (noArt) hide();
@@ -386,8 +646,8 @@ function detail(root: HTMLElement, path: string): void {
   );
 }
 
-export function render(root: HTMLElement, rest: string): () => void {
+export function render(root: HTMLElement, rest: string, query = ""): () => void {
   if (rest.startsWith("/item/")) detail(root, rest.slice("/item".length));
-  else overview(root);
+  else overview(root, query);
   return () => undefined;
 }

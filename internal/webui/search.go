@@ -133,11 +133,14 @@ func (s *Server) hitItem(r *http.Request, v mediaView, e *search.Entry) (MediaIt
 				v.video(&it)
 			}
 		}
+		v.decorate(&it, nil)
 		return it, true
 	case lib == meta.LibraryTV && e.Kind == search.EntShow && in.Type == meta.TDir:
 		return v.showItem(v.showGroup(in.Parent, &in), path.Dir(p)), true
 	case lib == meta.LibraryMusic && e.Kind == search.EntAlbum:
-		return v.item(in, p, "album"), true
+		it := v.item(in, p, "album")
+		v.decorate(&it, nil)
+		return it, true
 	case lib == meta.LibraryRoms && e.Kind == search.EntGame:
 		return v.romItem(in, p)
 	}

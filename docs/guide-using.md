@@ -50,6 +50,17 @@ tailraid search index                          # run the leader's index pass now
 
 Names are answered live from the metadata. Contents and tags are indexed by the leader every 10 minutes (`search.interval`) into `/.tailraid/index`, inside the volume.
 
+Field terms find films, shows and albums by what their sidecars say, in the header's search (the files) and in the Media tab's own search field (the posters), which suggests names as you type:
+
+```sh
+tailraid search 'actor:"tom hanks" genre:drama'   # the files of every match
+tailraid search 'director:villeneuve year:201x'   # a decade; year:1990-1999 is a range
+```
+
+## Watching on the Media tab
+
+Play goes fullscreen; leaving fullscreen keeps the film in a viewer over the tab, with its details folded and a way back to the library where you were. An album opens its own page with a now-playing view behind the player bar's cover. The tab remembers where each person stopped, from any device: Continue watching leads the tab, a film's Play resumes, a show's Play is the next episode, and episodes and seasons can be marked watched. A person is the signed-in user once the cluster has users, else their Tailscale login. Tracks count their plays (Most played sorts by them), and a track over 20 minutes resumes like a film.
+
 ## Posters and descriptions for the Media tab
 
 ```sh
