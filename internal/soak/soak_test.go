@@ -260,12 +260,13 @@ func (e *harnessEnv) WebURL(_ context.Context, n soak.NodeRef) (string, error) {
 	e.pins[nd.I], e.stop[nd.I] = p, cancel
 	loop := netip.MustParseAddr("127.0.0.1")
 	ts := tailscale.NewFake(loop, "soak-driver", nil)
+	ts.SetUser(loop, "soak@example.com") // the driver's Tailscale login: its playback viewer (docs/13 §10c)
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: e.c.Clk, Member: func(string) (meta.Node, bool) {
 		return meta.Node{Idx: nd.Idx(), ID: nd.ID, Name: n.Name, Kind: meta.KindDevice, TSStableID: "soak-driver", Addr: loop.String()}, true
 	}}
 	ui, err := webui.New(webui.Options{
 		FS: nd.FS, Store: nd.Node.FSM, Auth: auth, Clk: e.c.Clk, Logger: slog.New(slog.DiscardHandler), Retention: 30 * 24 * time.Hour, Pins: p,
-		Node:   n.Name, // an upload's temp is the node's own, as node.go wires it (I-226)
+		Node: n.Name, NodeName: n.Name, // an upload's temp is the node's own, as node.go wires it (I-226)
 		Search: e.searchOf(nd), Catalog: e.searchOf(nd),
 		Status: func() any { rep, _ := e.Status(context.Background(), n); return rep },
 		Chunks: func(ctx context.Context, sel string, off, lim int) (int, []admin.ChunkReport, error) {
@@ -838,7 +839,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		if len(ph.Checks) == 0 {
 			t.Errorf("%s has no checks", ph.Name)
 		}
-		if ph.Name == "15 s3 bucket" || ph.Name == "16 web ui" || ph.Name == "19 snapshots" || ph.Name == "21 search and media" || ph.Name == "24 secrets" { // the harness offers everything these phases can use
+		if ph.Name == "15 s3 bucket" || ph.Name == "16 web ui" || ph.Name == "19 snapshots" || ph.Name == "21 search and media" || ph.Name == "35 watching and media search" || ph.Name == "24 secrets" { // the harness offers everything these phases can use
 			for _, chk := range ph.Checks {
 				if chk.OK == nil {
 					t.Errorf("%s: %s skipped: %s", ph.Name, chk.Name, chk.Text)
@@ -846,7 +847,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 29 { // the standard phases (1–24, 33, 34, 32, 28–31) less 22 and 23
+	if sum.Failed != 0 || len(sum.Phases) != 30 { // the standard phases (1–24, 35, 33, 34, 32, 28–31) less 22 and 23
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0

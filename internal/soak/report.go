@@ -45,6 +45,7 @@ type reportData struct {
 	Snapshots  []snapView // phase 19's round trip (docs/16), empty when no snapshot was recorded
 	RoundTrip  string
 	Restores   []restoreView // phase 32's jobs (docs/16 §6), empty when no job was followed
+	Queries    []queryView   // phase 35's media queries (docs/18 §6a), each gateway's answer time
 	Users      []string      // phases 28–31 (docs/21 §10): the people, the grant matrix and the audit counts
 	PeakSkew   int           // most chunks above the host cap in any sample
 	Generated  string
@@ -202,6 +203,7 @@ func buildReport(s Summary) reportData {
 	restoreCharts, restores := restoreFigures(s)
 	d.Charts = append(d.Charts, restoreCharts...)
 	d.Restores = restores
+	d.Queries = queryRows(s)
 	d.Users = usersLines(s)
 	var spread []*Sample
 	for i := range s.Records {
@@ -551,6 +553,10 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 <p class="meta">phase 32 (docs/16 §6): every restore job the phase followed, with what it restored and whether it resumed</p>
 <table><tr><th>Job</th><th>Role</th><th>Destination</th><th>State</th><th class="num">Files</th><th class="num">Bytes</th><th class="num">Already there</th><th class="num">Resumed</th><th class="num">Took</th></tr>
 {{range .Restores}}<tr><td>{{.ID}}</td><td>{{.Label}}</td><td>{{.Dst}}</td><td>{{.State}}</td><td class="num">{{.Files}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.Existing}}</td><td class="num">{{.Resumed}}</td><td class="num">{{.Took}}</td></tr>{{end}}</table>{{end}}
+{{if .Queries}}<h2>Media queries</h2>
+<p class="meta">phase 35 (docs/18 §6a): each query of the table and how long every gateway took to answer it in the Media tab's scope</p>
+<table><tr><th>Query</th><th>Answer time per gateway</th></tr>
+{{range .Queries}}<tr><td>{{.Query}}</td><td>{{.Times}}</td></tr>{{end}}</table>{{end}}
 {{if .Users}}<h2>Users</h2>
 <p class="meta">phases 28–31 (docs/21 §10): the people made for the run, what each gateway answered each user, and the audit log's counts</p>
 <pre>{{range .Users}}{{.}}
