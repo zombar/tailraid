@@ -299,3 +299,53 @@ func TestRepair_Home_FailedMovesShutTheGate(t *testing.T) {
 		t.Fatalf("no move after the hold: %+v, gate %+v", st, r.Home())
 	}
 }
+
+// A host dead past fill_after has its slots refilled elsewhere, and the sweep after the
+// refills finds them away but not movable (their home is dead). When the host returns,
+// the next pass sweeps again, since a target has become a destination since a sweep
+// that left away bytes unmovable. The following passes bring the slots home, as the
+// per-pass walk once did, not an hour later (soak phase 11, 2026-10-16: corpus data slots
+// stayed on a non-voter after the leader's restart in phase 6).
+// Invariant: I-379, I-295
+func TestRepair_HomeReturns_SweepsAndMovesHome(t *testing.T) {
+	c := testharness.NewCluster(t, 5, 2, 2)
+	defer c.Close()
+	leader := c.Leader()
+	data := testharness.Pattern(8*int(testharness.ChunkSize), 17)
+	c.WriteFile(leader.I, "/f", data)
+	v := (leader.I + 2) % 5
+	c.Kill(v)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	c.Clk.Advance(cluster.FillAfter)
+	c.Probe()
+	cfg := repairCfg()
+	r := newRepairer(c, leader, cfg)
+	for range 4 { // the refills, then the sweep they call for, with the host still dead
+		_, err := r.Scan(ctx)
+		must(t, err)
+	}
+	if n := awayIn(c, leader.I, "/f"); n == 0 {
+		t.Fatal("setup: nothing away after the refills")
+	}
+	c.Restart(v)
+	c.Settle()
+	c.Probe()
+	swept := false
+	for p := range 6 {
+		st, err := r.Scan(ctx)
+		must(t, err)
+		swept = swept || st.Swept
+		if awayIn(c, leader.I, "/f") == 0 {
+			t.Logf("home after %d passes", p+1)
+			break
+		}
+	}
+	if n := awayIn(c, leader.I, "/f"); n != 0 || !swept {
+		t.Fatalf("%d slots still away six passes after the host returned (swept %v, gate %+v)", n, swept, r.Home())
+	}
+	got, err := c.ReadFileCold(leader.I, "/f")
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read: %v", err)
+	}
+}

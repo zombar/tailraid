@@ -306,7 +306,14 @@ while the gate is open (case 7), and the next `SumsBatch` chunks of the sums que
 leader, the first after `SweepInterval` (1 h) since the last sweep, a pass whose home
 candidate set changed, `check --scrub`, a pass while the gate is open and its queue is
 empty, and the first pass after repairs re-placed chunks once no class needs work (a
-refill can leave a slot away from home, which only a sweep counts). A sweep scrubs the
+refill can leave a slot away from home, which only a sweep counts). One more trigger is a
+pass where a target can take shards that could not at the last sweep, when that sweep
+left away bytes it could not move. That covers a host back from the dead, or a full disk
+with room again. A refill while a home was dead leaves its slots away and unmovable until
+that home returns. Without this trigger they would wait for the hourly sweep; the per-pass
+walk before 0.10.4 brought them home within minutes (`make soak` phase 11 on 2026-10-16
+found the corpus's data slots on a non-voter after phase 6 restarted the leader). A host
+that flaps costs one sweep each time it returns. A sweep scrubs the
 chunks whose turn came since the previous sweep (§5), counts the slots away from home,
 the movable bytes and the disk skew (between sweeps `status` shows these from the last
 one), and queues in hash order the movable chunks it did not move and the chunks still
@@ -470,8 +477,10 @@ state to patch.
   and at most `HomeBatch` chunks of the home queue (while the gate is open) and
   `SumsBatch` of the sums queue; a sweep visits every live chunk and runs on the first
   pass as leader, after `SweepInterval`, when the home candidate set changed, for
-  `check --scrub`, while the gate is open with an empty queue, and on the first pass with
-  no class needing work after a pass re-placed chunks.
+  `check --scrub`, while the gate is open with an empty queue, on the first pass with
+  no class needing work after a pass re-placed chunks, and on a pass where a target can
+  take shards that could not at the last sweep, when that sweep left away bytes
+  unmovable.
 - **I-380** — A class whose chunks a pass visited without committing or attempting a new
   placement for any of them is skipped by the passes after it until its view (each
   member's state, liveness and fitness to take a shard, and the volume's policy) changes,
@@ -510,7 +519,7 @@ state to patch.
 | I-215 | `TestScrubDue_Window`, `TestRepair_ScrubPeriod_CoversEveryChunkOnce`, `TestRepair_ScrubPeriod_FirstPassAsLeader`, `TestConfig_ScrubPeriod` |
 | I-377 | `TestFSM_Stats_IncrementalMatchesRecompute`, `TestClasses_GroupBySlotSet`, `TestModelCheck_Long` |
 | I-378 | `TestClasses_RepresentativeMatchesEveryMember`, `TestScanHealth_FromClassesMatchesEveryChunk` |
-| I-379 | `TestRepair_PassVisitsOnlyWhereWorkIs`, `TestRepair_ScrubPeriod_CoversEveryChunkOnce`, `TestRepair_RefillGoesHome_Table` |
+| I-379 | `TestRepair_HomeReturns_SweepsAndMovesHome`, `TestRepair_PassVisitsOnlyWhereWorkIs`, `TestRepair_ScrubPeriod_CoversEveryChunkOnce`, `TestRepair_RefillGoesHome_Table` |
 | I-380 | `TestRepair_StuckClassWaitsForTheView`, `TestRepair_PutFails_Retries` |
 | I-195 | `TestWebUI_Ls_HidesTailraidTree`; `TestStub_I_195` (planned with the trash of docs/02: TestVFS_TailraidTree_IsEphemeral) |
 | I-182 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestSchedule_TakesAndThins_Table`, `TestSchedule_OfflineMirrorNothingHeld_CatchUpOnAttach`, `TestSchedule_ThinThenSweep`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestConfig_Mirrors`, `TestSchedule_AutoNameTaken_NoRetry`, `TestSchedule_SkipsWhileCodecOld` |
