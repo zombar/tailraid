@@ -314,7 +314,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   the gateway itself is cut off and rejoins; a refused operation may land after the heal,
   which Raft allows, so the check is FSM agreement, not absence; I-29, L-59, L-148); 11
   automation (every budget within the hysteresis of `/dev/disk`, a 2 GiB `/dev/fill` on
-  one node moves its store cap within two ticks, the corpus's data slots sit on voters,
+  one node moves its store cap within two ticks, the corpus's data slots sit on voters
+once repair has run until the home gate shuts (an earlier phase's fault can leave a data
+slot away from home on a non-voter until the gate moves it, I-295),
   `set-redundancy --auto` moves the policy to the member table's rule with the migration
   complete and the corpus exact, then the previous pin is restored; I-74, I-75, I-77); 12
   large file (a file many times the WAL cap, 256 MiB in the quick profile and 1 GiB in
