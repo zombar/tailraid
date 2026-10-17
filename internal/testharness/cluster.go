@@ -105,15 +105,17 @@ type ClusterNode struct {
 	Net    *FaultNet
 	FS     *vfs.FS
 	Flush  *vfs.Flusher
-	Reader *vfs.Reader
-	Events *meta.EventRing // chunk history (always on in the harness)
-	RPC    *rpc.Server
-	srv    *httptest.Server
-	port   int
-	first  net.Listener // the RPC port, held from allocation until the first start so no other process can take it
-	trans  *raft.InmemTransport
-	raddr  raft.ServerAddress
-	alive  bool // guarded by Cluster.mu
+	// Proposals counts what the node's gateway proposes, by op, as node.go wires it (I-403)
+	Proposals *vfs.Proposals
+	Reader    *vfs.Reader
+	Events    *meta.EventRing // chunk history (always on in the harness)
+	RPC       *rpc.Server
+	srv       *httptest.Server
+	port      int
+	first     net.Listener // the RPC port, held from allocation until the first start so no other process can take it
+	trans     *raft.InmemTransport
+	raddr     raft.ServerAddress
+	alive     bool // guarded by Cluster.mu
 	// Raft state lives in memory and survives a simulated kill, like the page cache of a
 	// process kill would; production uses the fsynced bbolt store (docs/04 §8.1)
 	stores  *cluster.Stores
@@ -410,7 +412,8 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.Reader.Events = nd.Events
 	cfg := vfs.DefaultConfig()
 	cfg.PutDeadline = 2 * time.Second
-	nd.Flush = vfs.NewFlusher(nd.Ov, nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, c.Clk, cfg, nil)
+	nd.Proposals = vfs.CountProposals(nd.Node)
+	nd.Flush = vfs.NewFlusher(nd.Ov, nd.Node.FSM, nd.Proposals, nd.Prober, nd.Client, nd.Reader, c.Clk, cfg, nil)
 	// a Commit carries shard sums only once every member reads codec 5 (I-201). The closure
 	// keeps the node it was built with: a stats writer still holding these handles after a
 	// restart calls it when nd.Node is another node, or nil while the node is down.
@@ -427,7 +430,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.Flush.Slow = func(n meta.NodeIdx) { nd.Prober.Slow(n) }
 	nd.Flush.Held = nd.Prober.Held
 	nd.Flush.Events = nd.Events
-	nd.FS = vfs.New(nd.Node.FSM, nd.Node, nd.Ov, nd.Reader, c.Clk, 501, 20)
+	nd.FS = vfs.New(nd.Node.FSM, nd.Proposals, nd.Ov, nd.Reader, c.Clk, 501, 20)
 	nd.FS.SetFlusher(nd.Flush)
 	nd.FS.MinCodec = nd.Flush.MinCodec // the same view, as node.go wires it
 	if c.retryUntilStale {

@@ -114,6 +114,9 @@ type FlushPlan struct {
 	// walPos is the log position at capture: every extent of the plan lies below it and
 	// every fresh one above (docs/04 §2.1, I-397).
 	walPos int64
+	// attrs are the attributes held when the plan was captured (I-401): the Commit that
+	// leaves the file clean carries them; a write since drops their times.
+	attrs pendingAttrs
 }
 
 // dirtyFile is the per-inode overlay state. All fields are guarded by mu.
@@ -134,10 +137,10 @@ type dirtyFile struct {
 	counted   uint64 // this entry's share of Overlay.total (fresh + plan bytes)
 	lastErr   error  // the last flush attempt's failure, nil after a success (I-79)
 	lastWrite time.Time
-	// times are the access and modification times a client set while the file was dirty
-	// and after its last write, re-applied after each flush's Commit, which stamps its own
-	// (I-230); a later write or truncate clears them, being newer
-	times *userTimes
+	// attrs are the mode, owner and times a client set while the file was dirty, held
+	// for the flush's Commit (docs/04 §6, I-401); a later write or truncate clears their
+	// times, being newer (I-230)
+	attrs pendingAttrs
 	// Group commit (docs/04 §2.1, I-168): a record's in-memory effect waits in pending
 	// until its fsync succeeded and is applied in log order; gate holds new appends while
 	// a snapshot, compaction or eviction waits for pending to drain.
@@ -202,7 +205,17 @@ func (d *dirtyFile) settle() {
 	d.c().Broadcast()
 }
 
-func (d *dirtyFile) dirty() bool { return len(d.ext) > 0 || d.sizeSet || d.plan != nil }
+func (d *dirtyFile) dirty() bool {
+	return len(d.ext) > 0 || d.sizeSet || d.plan != nil || !d.attrs.empty()
+}
+
+// dropTimes clears the held times, in the plan too: a write or truncate is newer (I-230).
+func (d *dirtyFile) dropTimes() {
+	d.attrs.clear(timeMask)
+	if d.plan != nil {
+		d.plan.attrs.clear(timeMask)
+	}
+}
 
 // effSize is the client-visible size given the current committed size: without a
 // truncate the overlay has no size of its own, so other gateways' Commits show through
@@ -501,6 +514,7 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 		switch typ {
 		case recBase:
 			d.known, d.size, d.minSize, d.sizeSet, d.ext = true, off, 0, false, nil
+			d.attrs = pendingAttrs{}
 		case recState:
 			// a segment's first record: it starts the inode only when the segments before
 			// it are gone (docs/04 §2.1)
@@ -511,6 +525,13 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 			if c, ok := decodeClean(off, data); ok && d.known {
 				d.ext = d.ext.cleaned(c.w, c.ranges)
 				d.size, d.minSize, d.sizeSet = c.st.size, c.st.minSize, c.st.sizeSet
+				if c.attrsDone {
+					d.attrs.dropBefore(c.w) // the Commit landed them (I-401)
+				}
+			}
+		case recAttrs:
+			if a, ok := decodeAttrs(off, data); ok && d.known {
+				d.attrs.set(a, walOff)
 			}
 		case recWrite:
 			if !d.known {
@@ -518,6 +539,7 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 			}
 			d.ext.insert(extent{off: off, n: uint64(n), walOff: walOff})
 			d.size = max(d.size, off+uint64(n))
+			d.attrs.clear(timeMask)
 		case recTruncate:
 			if !d.known {
 				return nil
@@ -525,6 +547,7 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 			d.ext.truncate(off)
 			d.size = off
 			d.setTrunc(off)
+			d.attrs.clear(timeMask)
 		case recActor:
 			d.actor = meta.UserIdx(off) //nolint:gosec // written by noteActor from a UserIdx
 		}
@@ -789,7 +812,7 @@ func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte, actor m
 		d.ext.insert(extent{off: off, n: n, walOff: walOff})
 		d.size = max(d.size, off+n)
 		d.lastWrite = o.clk.Now()
-		d.times = nil
+		d.dropTimes()
 		o.recount(d)
 	}})
 	d.mu.Unlock()
@@ -813,7 +836,23 @@ func (o *Overlay) rotate(d *dirtyFile) error {
 	if d.actor != 0 {
 		first = append(first, encodeRecord(recActor, uint64(d.actor), nil))
 	}
-	return d.wal.Rotate(first...)
+	at := int64(-1)
+	if !d.attrs.empty() {
+		// the held attributes move to the new segment, so the old one can go (I-401)
+		for _, r := range first {
+			at += int64(len(r))
+		}
+		at += 1 + recHeaderLen
+		first = append(first, encodeRecord(recAttrs, uint64(d.attrs.a.Mask), encodeAttrs(d.attrs.a)))
+	}
+	next := segOf(d.wal.Size()) + 1
+	if err := d.wal.Rotate(first...); err != nil {
+		return err
+	}
+	if at >= 0 {
+		d.attrs.at(segPos(next, at))
+	}
+	return nil
 }
 
 // Truncate sets the overlay size and records the truncation point (review #2).
@@ -854,7 +893,7 @@ func (o *Overlay) TruncateAs(ino meta.Ino, baseSize, size uint64, actor meta.Use
 			d.planTrunc = true
 		}
 		d.lastWrite = o.clk.Now()
-		d.times = nil
+		d.dropTimes()
 		o.recount(d)
 	}})
 	d.mu.Unlock()
@@ -900,21 +939,67 @@ func (o *Overlay) Size(ino meta.Ino, committed uint64) (uint64, bool) {
 	return d.effSize(committed), true
 }
 
-// userTimes are a client's access and modification times, in nanoseconds (meta.SetAttr).
-type userTimes struct{ atime, mtime int64 }
-
-// NoteTimes records the times a client set on ino, when it has dirty data: the flusher
-// sets them again after it commits that data (I-230). A file with nothing dirty needs
-// nothing: no Commit follows to stamp over them.
-func (o *Overlay) NoteTimes(ino meta.Ino, atime, mtime int64) {
+// HoldAttrs holds a client's SETATTR on ino for its flush instead of a proposal (docs/04
+// §6, I-401): only while ino has unflushed state here, only for the writer the flush acts
+// for, and only mode, owner and times. A held SETATTR is fsynced in the WAL before
+// HoldAttrs returns, as an acknowledged WRITE is; held is false when the caller must
+// propose it.
+func (o *Overlay) HoldAttrs(ino meta.Ino, actor meta.UserIdx, s meta.SetAttr) (held bool, err error) {
+	if s.Mask == 0 || s.Mask&^heldMask != 0 {
+		return false, nil
+	}
 	d, _ := o.get(ino, 0, false)
 	if d == nil {
-		return
+		return false, nil
+	}
+	if !d.waitGate() {
+		d.mu.Unlock()
+		return o.HoldAttrs(ino, actor, s)
+	}
+	if !d.dirty() || d.actor != actor {
+		d.mu.Unlock()
+		return false, nil
+	}
+	a := meta.CommitAttrs{Mask: s.Mask, Mode: s.Mode, Uid: s.Uid, Gid: s.Gid, Atime: s.Atime, Mtime: s.Mtime}
+	at, end, err := d.wal.write(recAttrs, uint64(a.Mask), encodeAttrs(a))
+	if err != nil {
+		d.mu.Unlock()
+		return false, err
+	}
+	d.pending = append(d.pending, pendingRec{end: end, apply: func() { d.attrs.set(a, at) }})
+	d.mu.Unlock()
+	err = d.wal.syncTo(end)
+	d.mu.Lock()
+	d.settle()
+	d.mu.Unlock()
+	return err == nil, err
+}
+
+// Attrs is what ino's held attributes are as this gateway shows them: the plan's under
+// the fresh ones; ok is false when none are held.
+func (o *Overlay) Attrs(ino meta.Ino) (meta.CommitAttrs, bool) {
+	d, _ := o.get(ino, 0, false)
+	if d == nil {
+		return meta.CommitAttrs{}, false
 	}
 	defer d.mu.Unlock()
-	if d.dirty() {
-		d.times = &userTimes{atime: atime, mtime: mtime}
+	merged := d.attrs
+	if d.plan != nil {
+		merged = d.plan.attrs
+		merged.over(d.attrs)
 	}
+	return merged.a, !merged.empty()
+}
+
+// PlanAttrs is what plan's Commit carries: the attributes held at its capture, less the
+// times a write since made older (I-230).
+func (o *Overlay) PlanAttrs(plan *FlushPlan) meta.CommitAttrs {
+	d, _ := o.get(plan.Ino, 0, false)
+	if d == nil {
+		return meta.CommitAttrs{}
+	}
+	defer d.mu.Unlock()
+	return plan.attrs.a
 }
 
 // Changed reports a dirty file's times as this gateway sees them (docs/04 §3, I-261):
@@ -929,23 +1014,15 @@ func (o *Overlay) Changed(ino meta.Ino) (wrote time.Time, user int64, hasUser, o
 	if !d.dirty() {
 		return time.Time{}, 0, false, false
 	}
-	if d.times != nil {
-		return d.lastWrite, d.times.mtime, true, true
+	merged := d.attrs
+	if d.plan != nil {
+		merged = d.plan.attrs
+		merged.over(d.attrs)
+	}
+	if merged.a.Mask&meta.AttrMtime != 0 {
+		return d.lastWrite, merged.a.Mtime, true, true
 	}
 	return d.lastWrite, 0, false, true
-}
-
-// UserTimes returns the times NoteTimes recorded on ino and no write has superseded.
-func (o *Overlay) UserTimes(ino meta.Ino) (atime, mtime int64, ok bool) {
-	d, _ := o.get(ino, 0, false)
-	if d == nil {
-		return 0, 0, false
-	}
-	defer d.mu.Unlock()
-	if d.times == nil {
-		return 0, 0, false
-	}
-	return d.times.atime, d.times.mtime, true
 }
 
 // DataEnd reports what the overlay holds of an inode's data: the end of its last dirty
@@ -1101,12 +1178,13 @@ func (o *Overlay) SnapshotForFlush(ino meta.Ino) (*FlushPlan, bool) {
 	}
 	defer d.mu.Unlock()
 	defer d.quiesce()() // an append between its write and its fsync is not in the snapshot (I-168)
-	if d.plan != nil || (len(d.ext) == 0 && !d.sizeSet) {
+	if d.plan != nil || (len(d.ext) == 0 && !d.sizeSet && d.attrs.empty()) {
 		return nil, false
 	}
-	p := &FlushPlan{Ino: ino, Size: d.size, MinSize: d.minSize, SizeSet: d.sizeSet, Extents: d.ext.clone(), Actor: d.actor, walPos: d.wal.Size()}
+	p := &FlushPlan{Ino: ino, Size: d.size, MinSize: d.minSize, SizeSet: d.sizeSet, Extents: d.ext.clone(), Actor: d.actor, walPos: d.wal.Size(), attrs: d.attrs}
 	d.plan = p
 	d.ext = nil
+	d.attrs = pendingAttrs{}
 	d.planMin = d.size
 	d.planTrunc = false
 	o.recount(d)
@@ -1161,8 +1239,17 @@ func (o *Overlay) AbortFlush(plan *FlushPlan) {
 		d.setTrunc(plan.MinSize)
 	}
 	d.size = max(d.size, d.ext.maxEnd())
+	d.mergeAttrs(plan)
 	d.plan = nil
 	o.recount(d)
+}
+
+// mergeAttrs puts a plan's held attributes back under the fresh ones (newer win): the
+// flush failed, or committed without them (a partial Commit, I-401).
+func (d *dirtyFile) mergeAttrs(plan *FlushPlan) {
+	merged := plan.attrs
+	merged.over(d.attrs)
+	d.attrs = merged
 }
 
 // mergeBack rebuilds the fresh set as old (clipped to planMin) with the fresh extents on top.
@@ -1189,6 +1276,10 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 		return errors.New("vfs: plan is not outstanding")
 	}
 	d.mergeBack(plan.Residual)
+	attrsDone := len(plan.Residual) == 0 // only a Commit that leaves no data carries them (I-401)
+	if !attrsDone {
+		d.mergeAttrs(plan)
+	}
 	d.sizeSet = d.planTrunc
 	if d.planTrunc {
 		d.minSize = min(d.planMin, committedSize)
@@ -1199,7 +1290,7 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 	d.plan = nil
 	o.recount(d)
 	defer o.notify() // room for the WRITEs waiting at a cap (L-188)
-	if len(d.ext) == 0 && !d.sizeSet {
+	if len(d.ext) == 0 && !d.sizeSet && d.attrs.empty() {
 		// nothing left: drop the entry so the next touch starts from the then-committed
 		// size instead of pinning this one (L-178)
 		return o.evict(d)
@@ -1210,7 +1301,7 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 	}
 	// the Commit is recorded, not copied: a clean record names what it made durable and
 	// the segments nothing live points into go (docs/04 §2.1, I-397)
-	if err := d.appendClean(plan); err != nil {
+	if err := d.appendClean(plan, attrsDone); err != nil {
 		return err
 	}
 	return d.wal.DropBefore(d.lowestLive())
@@ -1231,6 +1322,11 @@ func (o *Overlay) compact(d *dirtyFile, committedSize uint64) error {
 			recs = append(recs, walRec{typ: recTruncate, off: d.size})
 		}
 	}
+	attrsAt := -1
+	if !d.attrs.empty() {
+		attrsAt = len(recs)
+		recs = append(recs, walRec{typ: recAttrs, off: uint64(d.attrs.a.Mask), data: encodeAttrs(d.attrs.a)})
+	}
 	for _, x := range d.ext {
 		recs = append(recs, walRec{typ: recWrite, off: x.off, src: x.walOff, n: x.n})
 	}
@@ -1240,18 +1336,21 @@ func (o *Overlay) compact(d *dirtyFile, committedSize uint64) error {
 		for i := range d.ext {
 			d.ext[i].walOff = offs[first+i]
 		}
+		if attrsAt >= 0 {
+			d.attrs.at(offs[attrsAt])
+		}
 	}
 	return err
 }
 
 // appendClean logs what plan's Commit made durable and the inode's state after it, and
 // fsyncs it. Called with d.mu held and d's appends quiesced.
-func (d *dirtyFile) appendClean(plan *FlushPlan) error {
+func (d *dirtyFile) appendClean(plan *FlushPlan, attrsDone bool) error {
 	ranges := []fileRange{{0, math.MaxUint64}}
 	if len(plan.Residual) > 0 {
 		ranges = plan.Extents.minus(plan.Residual)
 	}
-	_, end, err := d.wal.write(recClean, uint64(plan.walPos), encodeClean(d.size, d.minSize, d.sizeSet, ranges)) //nolint:gosec // a log position
+	_, end, err := d.wal.write(recClean, uint64(plan.walPos), encodeClean(d.size, d.minSize, d.sizeSet, attrsDone, ranges)) //nolint:gosec // a log position
 	if err != nil {
 		return err
 	}
@@ -1261,7 +1360,7 @@ func (d *dirtyFile) appendClean(plan *FlushPlan) error {
 // lowestLive is the log position of d's oldest live extent, or the end of the log when
 // none is left.
 func (d *dirtyFile) lowestLive() int64 {
-	low := d.wal.Size()
+	low := min(d.wal.Size(), d.attrs.lowest())
 	for _, x := range d.ext {
 		low = min(low, x.walOff)
 	}

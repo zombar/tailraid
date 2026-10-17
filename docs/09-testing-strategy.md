@@ -556,6 +556,16 @@ slot away from home on a non-voter until the gate moves it, I-295),
   drain rate seen in a sample, and the staged warning in every sample over 1 GiB, are
   checked when a sample catches them and otherwise recorded as skipped; the report charts
   the staged bytes and the drain rate.
+  34 small files (docs/04 §6, `smallfiles.go`, run after 33): a copy of 40 small files
+  the way `cp -p` makes one (CREATE, WRITE at an offset, SETATTR of the mode and the
+  source's times, and the same for an AppleDouble `._` companion) through one gateway,
+  through the environment's `AttrVolume` (a volume without one skips the phase):
+  `gateway.proposals` grows by a create per file and no SetAttr (two allowed for the
+  gateway's own writers under `/.tailraid`), and `gateway.attrs_deferred` by at least
+  the SETATTRs sent; the writing gateway reports each
+  file's mode and times at once; after the idle flush every file reads back exact on
+  another gateway with the mode, owner and times the copy set; a SETATTR that changes
+  nothing on a clean file proposes nothing (I-401..I-403).
   **Users first** (`make soak SOAK_FLAGS=-users-first`, `Run.UsersFirst`): a real volume
   has its first admin from `init`, so a run can put phase 0 before phase 1: the admin
   made as phase 28 makes them, the driver's mount uid and SMB account bound to them on

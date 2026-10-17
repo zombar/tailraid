@@ -234,3 +234,48 @@ func (v BillyVolume) Size(p string) (int64, error) {
 
 // join builds a volume path.
 func join(elem ...string) string { return path.Join(elem...) }
+
+// AttrVolume is a Volume that sets and reads a file's mode and times, as a copy does
+// (soak phase 34); a volume without it skips the phase.
+type AttrVolume interface {
+	SetAttr(p string, mode uint32, mtime time.Time) error
+	Attrs(p string) (mode uint32, mtime time.Time, err error)
+}
+
+// SetAttr is chmod and a utime on the mount.
+func (v OSVolume) SetAttr(p string, mode uint32, mtime time.Time) error {
+	if err := os.Chmod(v.abs(p), os.FileMode(mode)); err != nil {
+		return err
+	}
+	return os.Chtimes(v.abs(p), mtime, mtime)
+}
+
+// Attrs is a stat on the mount.
+func (v OSVolume) Attrs(p string) (uint32, time.Time, error) {
+	fi, err := os.Stat(v.abs(p))
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	return uint32(fi.Mode().Perm()), fi.ModTime(), nil
+}
+
+// SetAttr is the filesystem's Chmod and Chtimes.
+func (v BillyVolume) SetAttr(p string, mode uint32, mtime time.Time) error {
+	ch, ok := v.FS.(billy.Change)
+	if !ok {
+		return errors.New("soak: the filesystem sets no attributes")
+	}
+	if err := ch.Chmod(p, os.FileMode(mode)); err != nil {
+		return err
+	}
+	return ch.Chtimes(p, mtime, mtime)
+}
+
+// Attrs is the filesystem's Stat.
+func (v BillyVolume) Attrs(p string) (uint32, time.Time, error) {
+	fi, err := v.FS.Stat(p)
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	return uint32(fi.Mode().Perm()), fi.ModTime(), nil
+}

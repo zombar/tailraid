@@ -491,7 +491,7 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 		return admin.Report{}, errors.New("node is down")
 	}
 	rep := admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil)
-	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty()).WithFlusher(nd.Flush, nd.Ov).WithReader(nd.Reader)
+	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty()).WithFlusher(nd.Flush, nd.Ov).WithReader(nd.Reader).WithFS(nd.FS).WithProposals(nd.Proposals)
 	rep.Machine = admin.Vitals(nd.Dir, netip.Addr{})
 	if us := nd.Node.FSM.Users(); len(us) > 0 { // as serve's reporter (I-358)
 		rep.Users = &admin.UsersReport{Count: len(us), Sessions: len(nd.Node.FSM.Sessions())}
@@ -846,7 +846,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 28 { // the standard phases (1–24, 33, 32, 28–31) less 22 and 23
+	if sum.Failed != 0 || len(sum.Phases) != 29 { // the standard phases (1–24, 33, 34, 32, 28–31) less 22 and 23
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0

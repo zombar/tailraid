@@ -52,6 +52,8 @@ type fsCore struct {
 
 	// every byte a client read or wrote through a File (docs/17 §1: bytes_r, bytes_w)
 	bytesRead, bytesWritten atomic.Uint64
+	// SETATTRs held for a file's flush instead of proposed (docs/04 §6, I-403)
+	attrsHeld atomic.Uint64
 
 	// MinCodec, when set, is the oldest codec a live active member reads (the prober's
 	// view): a codec-9 field (Trash.Expect, Rename.NoReplace) is sent only once it is
@@ -465,6 +467,23 @@ func (f *FS) Stat(filename string) (os.FileInfo, error) {
 func (f *FS) Lstat(filename string) (os.FileInfo, error) { return f.Stat(filename) }
 
 func (f *FS) info(in meta.Inode) *fileInfo {
+	if in.Type == meta.TFile {
+		// what a client set on a file still being written here shows at once (I-401)
+		if a, ok := f.ov.Attrs(in.Ino); ok {
+			if a.Mask&meta.AttrMode != 0 {
+				in.Mode = a.Mode
+			}
+			if a.Mask&meta.AttrUid != 0 {
+				in.Uid = a.Uid
+			}
+			if a.Mask&meta.AttrGid != 0 {
+				in.Gid = a.Gid
+			}
+			if a.Mask&meta.AttrAtime != 0 {
+				in.Atime = a.Atime
+			}
+		}
+	}
 	fi := &fileInfo{in: in}
 	if f.enforced() {
 		// the mode bits a client sees follow the role (docs/21 §5, I-351): read-only
@@ -1016,10 +1035,36 @@ func (f *FS) setAttr(name string, sa meta.SetAttr) error {
 		return mapErr("setattr", name, err)
 	}
 	sa.Ino, sa.Now = in.Ino, f.now()
+	_, dirty := f.ov.Size(in.Ino, in.Size)
+	if !dirty && unchanged(in, sa) {
+		return nil // nothing to change: nothing to propose (I-402)
+	}
+	if dirty && in.Type == meta.TFile && (!f.enforced() || f.role(in.Ino) >= meta.RoleWrite) {
+		// a file being written here lands whole: its Commit carries this (docs/04 §6,
+		// I-401); a caller without Write is proposed, and the FSM refuses them
+		held, err := f.ov.HoldAttrs(in.Ino, f.actor, sa)
+		if err != nil {
+			return mapErr("setattr", name, err)
+		}
+		if held {
+			f.attrsHeld.Add(1)
+			return nil
+		}
+	}
 	if _, err := f.propose(context.Background(), meta.Command{Op: meta.OpSetAttr, SetAttr: &sa}); err != nil {
 		return mapErr("setattr", name, err)
 	}
 	return nil
+}
+
+// unchanged reports whether sa sets only what in already holds.
+func unchanged(in meta.Inode, sa meta.SetAttr) bool {
+	return (sa.Mask&meta.AttrMode == 0 || sa.Mode == in.Mode) &&
+		(sa.Mask&meta.AttrUid == 0 || sa.Uid == in.Uid) &&
+		(sa.Mask&meta.AttrGid == 0 || sa.Gid == in.Gid) &&
+		(sa.Mask&meta.AttrAtime == 0 || sa.Atime == in.Atime) &&
+		(sa.Mask&meta.AttrMtime == 0 || sa.Mtime == in.Mtime) &&
+		(sa.Mask&meta.AttrFlags == 0 || sa.Flags == in.Flags)
 }
 
 func (f *FS) Chmod(name string, mode os.FileMode) error {
@@ -1032,19 +1077,15 @@ func (f *FS) Lchown(name string, uid, gid int) error {
 
 func (f *FS) Chown(name string, uid, gid int) error { return f.Lchown(name, uid, gid) }
 
-// Chtimes sets a client's times. One set while the file has unflushed writes is noted in
-// the overlay, so the flush that commits those writes keeps it (I-230). A time outside
+// AttrsHeld is the SETATTRs this filesystem held for a file's flush (I-403).
+func (f *FS) AttrsHeld() uint64 { return f.attrsHeld.Load() }
+
+// Chtimes sets a client's times. One set while the file has unflushed writes is held in
+// the overlay, so the flush that commits those writes carries it (I-230, I-401). A time outside
 // what the volume represents (nanoseconds since 1970 in an int64: 1677–2262) is held at
 // the nearest end rather than wrapped.
 func (f *FS) Chtimes(name string, atime, mtime time.Time) error {
-	sa := meta.SetAttr{Mask: meta.AttrAtime | meta.AttrMtime, Atime: clampNano(atime), Mtime: clampNano(mtime)}
-	if err := f.setAttr(name, sa); err != nil {
-		return err
-	}
-	if in, err := f.resolve(name); err == nil {
-		f.ov.NoteTimes(in.Ino, sa.Atime, sa.Mtime)
-	}
-	return nil
+	return f.setAttr(name, meta.SetAttr{Mask: meta.AttrAtime | meta.AttrMtime, Atime: clampNano(atime), Mtime: clampNano(mtime)})
 }
 
 var (

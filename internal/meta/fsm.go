@@ -1062,7 +1062,28 @@ func (a *applier) commit(c *Commit) error {
 		in.RewriteAt = in.Version
 	}
 	in.Mtime, in.Ctime = now, now
+	applyCommitAttrs(in, c.Attrs) // the client's, after the Commit's own stamp (I-401)
 	return nil
+}
+
+// applyCommitAttrs sets the fields a Commit's attributes carry, as SetAttr does; ctime
+// stays the Commit's.
+func applyCommitAttrs(in *Inode, a CommitAttrs) {
+	if a.Mask&AttrMode != 0 {
+		in.Mode = a.Mode
+	}
+	if a.Mask&AttrUid != 0 {
+		in.Uid = a.Uid
+	}
+	if a.Mask&AttrGid != 0 {
+		in.Gid = a.Gid
+	}
+	if a.Mask&AttrAtime != 0 {
+		in.Atime = a.Atime
+	}
+	if a.Mask&AttrMtime != 0 {
+		in.Mtime = a.Mtime
+	}
 }
 
 func (a *applier) setPlacement(c *SetPlacement) error {

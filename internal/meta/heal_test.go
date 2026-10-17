@@ -22,7 +22,7 @@ func init() {
 // same body in any older version is refused.
 // Invariant: I-393
 func TestCodec_SnapshotHeal_Version15(t *testing.T) {
-	if CodecHeal != commandVersionV15 || CodecVersion != commandVersionV15 {
+	if CodecHeal != commandVersionV15 || CodecVersion < commandVersionV15 {
 		t.Fatalf("CodecHeal %d, CodecVersion %d", CodecHeal, CodecVersion)
 	}
 	plain := Command{Op: OpSnapshotHeal, SnapshotHeal: &SnapshotHeal{ID: 7, Missing: 0, Now: 3}}

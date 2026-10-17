@@ -143,11 +143,15 @@ type GatewayReport struct {
 	Stage        uint64 `json:"stage"`
 	FlushedBytes uint64 `json:"flushed_bytes"`
 	DrainRate    uint64 `json:"drain_rate"`
-	Flushing     int    `json:"flushing"`    // inodes with a flush plan outstanding
-	FlushBytes   uint64 `json:"flush_bytes"` // chunk and shard buffers the flusher holds right now
-	FlushPeak    uint64 `json:"flush_peak"`  // the most it has held since start
-	FlushCap     uint64 `json:"flush_cap"`   // the bound of docs/04 §9 at the current policy
-	LastFlushErr string `json:"last_flush_err,omitempty"`
+	// the metadata this gateway proposed since start, by op, and the SETATTRs it held for
+	// a file's flush instead (docs/04 §6, I-403)
+	Proposals     map[string]uint64 `json:"proposals,omitempty"`
+	AttrsDeferred uint64            `json:"attrs_deferred"`
+	Flushing      int               `json:"flushing"`    // inodes with a flush plan outstanding
+	FlushBytes    uint64            `json:"flush_bytes"` // chunk and shard buffers the flusher holds right now
+	FlushPeak     uint64            `json:"flush_peak"`  // the most it has held since start
+	FlushCap      uint64            `json:"flush_cap"`   // the bound of docs/04 §9 at the current policy
+	LastFlushErr  string            `json:"last_flush_err,omitempty"`
 	// readahead (docs/04 §5, I-166): chunks a prefetch fetched, READs served by one, and
 	// the prefetches in flight right now
 	ReadaheadFetched   uint64 `json:"readahead_fetched"`
@@ -171,6 +175,13 @@ type GatewayReport struct {
 // WithFS adds the filesystem's client byte counters to the gateway view.
 func (g *GatewayReport) WithFS(fs *vfs.FS) *GatewayReport {
 	g.BytesRead, g.BytesWritten = fs.ClientBytes()
+	g.AttrsDeferred = fs.AttrsHeld()
+	return g
+}
+
+// WithProposals adds what the gateway proposed, by op (I-403).
+func (g *GatewayReport) WithProposals(p *vfs.Proposals) *GatewayReport {
+	g.Proposals = p.Counts()
 	return g
 }
 

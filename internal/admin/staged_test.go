@@ -1,10 +1,12 @@
 package admin_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/zombar/tailraid/internal/admin"
+	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/vfs"
 )
 
@@ -59,5 +61,32 @@ func TestCheck_WarnsStaged(t *testing.T) {
 		if c.warn && !strings.Contains(w, "on this host only") {
 			t.Errorf("warning %q does not say where the bytes are", w)
 		}
+	}
+}
+
+// The gateway view carries what the gateway proposed by op and the SETATTRs it held for a
+// file's flush (docs/12 §8).
+// Invariant: I-403
+func TestGatewayReport_Proposals(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	p := vfs.CountProposals(f)
+	fs := vfs.New(f.FSM, p, f.Ov, f.Reader(), f.Clk, 501, 20)
+	fh, err := fs.OpenFile("/a", os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	_ = fh.Close()
+	if err := fs.Chmod("/a", 0o600); err != nil { // held: the file is dirty here
+		t.Fatal(err)
+	}
+	if err := fs.MkdirAll("/d", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := admin.GatewayFromDirty(nil).WithFS(fs).WithProposals(p)
+	if g.Proposals["create"] != 1 || g.Proposals["mkdir"] != 1 || g.Proposals["setattr"] != 0 || g.AttrsDeferred != 1 {
+		t.Fatalf("proposals %v, attrs deferred %d", g.Proposals, g.AttrsDeferred)
 	}
 }

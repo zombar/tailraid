@@ -325,17 +325,21 @@ func (e *composeEnv) Volume(ref soak.NodeRef) (soak.Volume, bool) {
 }
 
 type fsReq struct {
-	Op   string `json:"op"`
-	Path string `json:"path"`
-	Off  int64  `json:"off"`
-	Data []byte `json:"data"`
-	Size int64  `json:"size"`
-	To   string `json:"to"`
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Off   int64  `json:"off"`
+	Data  []byte `json:"data"`
+	Size  int64  `json:"size"`
+	To    string `json:"to"`
+	Mode  uint32 `json:"mode,omitempty"`
+	Mtime int64  `json:"mtime,omitempty"`
 }
 
 type fsResp struct {
 	Data  []byte   `json:"data,omitempty"`
 	Size  int64    `json:"size"`
+	Mode  uint32   `json:"mode,omitempty"`
+	Mtime int64    `json:"mtime,omitempty"`
 	Names []string `json:"names,omitempty"`
 	Hash  string   `json:"hash,omitempty"` // hex sha256 (op "hash")
 	Error string   `json:"error,omitempty"`
@@ -378,6 +382,18 @@ func (v *httpVolume) WriteAt(p string, off int64, data []byte) error {
 func (v *httpVolume) ReadAll(p string) ([]byte, error) {
 	r, err := v.do(fsReq{Op: "read", Path: p})
 	return r.Data, err
+}
+
+// SetAttr sets a file's mode and times through the worker's NFS client (soak phase 34).
+func (v *httpVolume) SetAttr(p string, mode uint32, mtime time.Time) error {
+	_, err := v.do(fsReq{Op: "setattr", Path: p, Mode: mode, Mtime: mtime.UnixNano()})
+	return err
+}
+
+// Attrs is a file's mode and mtime as the worker's gateway shows them.
+func (v *httpVolume) Attrs(p string) (uint32, time.Time, error) {
+	r, err := v.do(fsReq{Op: "attrs", Path: p})
+	return r.Mode, time.Unix(0, r.Mtime), err
 }
 
 func (v *httpVolume) Truncate(p string, size int64) error {

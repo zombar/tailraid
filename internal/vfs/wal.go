@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/sysfs"
 )
 
@@ -23,6 +24,7 @@ const (
 	recActor    uint8 = 4 // off = the user whose writes follow (docs/21 §4, I-353), no data; a reader from before ignores it
 	recState    uint8 = 5 // off = overlay size, data = minSize u64 | sizeSet u8: a segment's first record (I-397)
 	recClean    uint8 = 6 // off = W, data = size | minSize | sizeSet | ranges…: what a Commit made durable (I-397)
+	recAttrs    uint8 = 7 // off = mask, data = mode | uid | gid | atime | mtime: a SETATTR held for the flush (I-401)
 )
 
 // Record layout: crc32c(u32 LE, over everything after it) | type u8 | off u64 LE | len u32 LE | data.
@@ -54,10 +56,11 @@ var ErrWALClosed = errors.New("vfs: wal unusable until restart")
 // walRec is a record to be written by Compact: a write record names its bytes by their
 // position and length in the log being compacted, so nothing is read ahead of the copy.
 type walRec struct {
-	typ uint8
-	off uint64
-	src int64  // data position in the current log (recWrite)
-	n   uint64 // data length (recWrite)
+	typ  uint8
+	off  uint64
+	src  int64  // data position in the current log (recWrite)
+	n    uint64 // data length (recWrite)
+	data []byte // the record's data itself, for a record with no one source in the log (recAttrs)
 }
 
 // compactBuf bounds the copy of one record during a compaction (docs/04 §2, I-80).
@@ -628,11 +631,20 @@ func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 	buf := make([]byte, compactBuf)
 	var pos int64
 	for i, r := range recs {
+		if r.data != nil {
+			r.n = uint64(len(r.data))
+		}
 		hdr := encodeRecord(r.typ, r.off, nil)
 		binary.LittleEndian.PutUint32(hdr[13:], uint32(r.n))
 		crc := crc32.Checksum(hdr[4:], crcTable)
 		dataPos := pos + recHeaderLen
-		for copied := int64(0); copied < int64(r.n); {
+		if r.data != nil {
+			if _, err := nf.WriteAt(r.data, dataPos); err != nil {
+				return abort("write", err)
+			}
+			crc = crc32.Update(crc, crcTable, r.data)
+		}
+		for copied := int64(0); r.data == nil && copied < int64(r.n); {
 			chunk := buf[:min(int64(len(buf)), int64(r.n)-copied)]
 			if err := w.readLocked(chunk, r.src+copied); err != nil {
 				return abort("read", err)
@@ -738,17 +750,21 @@ func decodeState(size uint64, data []byte) (walState, bool) {
 // cleanRec is a decoded clean record: the extent pieces below log position w inside
 // ranges were committed, and st is the inode's state after the Commit.
 type cleanRec struct {
-	w      int64
-	st     walState
-	ranges []fileRange
+	w         int64
+	st        walState
+	ranges    []fileRange
+	attrsDone bool // the Commit landed the attributes held before w (I-401)
 }
 
 // encodeClean is a clean record's data: size u64 | minSize u64 | sizeSet u8 | count u32 |
 // (start u64, end u64)… (W is its off).
-func encodeClean(size, minSize uint64, sizeSet bool, ranges []fileRange) []byte {
+func encodeClean(size, minSize uint64, sizeSet, attrsDone bool, ranges []fileRange) []byte {
 	b := make([]byte, 0, 21+16*len(ranges))
 	b = binary.LittleEndian.AppendUint64(b, size)
 	b = append(b, encodeState(minSize, sizeSet)...)
+	if attrsDone {
+		b[len(b)-1] |= 2
+	}
 	b = binary.LittleEndian.AppendUint32(b, uint32(len(ranges))) //nolint:gosec // a plan's chunks
 	for _, r := range ranges {
 		b = binary.LittleEndian.AppendUint64(b, r.start)
@@ -761,15 +777,16 @@ func decodeClean(w uint64, data []byte) (cleanRec, bool) {
 	if len(data) < 21 || w > 1<<62 {
 		return cleanRec{}, false
 	}
-	st, ok := decodeState(binary.LittleEndian.Uint64(data), data[8:17])
-	if !ok {
+	flags := data[16]
+	st, ok := decodeState(binary.LittleEndian.Uint64(data), append(append([]byte(nil), data[8:16]...), flags&1))
+	if !ok || flags > 3 {
 		return cleanRec{}, false
 	}
 	n := binary.LittleEndian.Uint32(data[17:])
 	if uint64(len(data)-21) != 16*uint64(n) {
 		return cleanRec{}, false
 	}
-	c := cleanRec{w: int64(w), st: st, ranges: make([]fileRange, n)}
+	c := cleanRec{w: int64(w), st: st, ranges: make([]fileRange, n), attrsDone: flags&2 != 0}
 	for i := range c.ranges {
 		at := 21 + 16*i
 		c.ranges[i] = fileRange{binary.LittleEndian.Uint64(data[at:]), binary.LittleEndian.Uint64(data[at+8:])}
@@ -778,4 +795,27 @@ func decodeClean(w uint64, data []byte) (cleanRec, bool) {
 		}
 	}
 	return c, true
+}
+
+// recAttrs data: mode u32 | uid u32 | gid u32 | atime i64 | mtime i64; off is the mask.
+const attrsDataLen = 4 + 4 + 4 + 8 + 8
+
+func encodeAttrs(a meta.CommitAttrs) []byte {
+	b := make([]byte, 0, attrsDataLen)
+	b = binary.LittleEndian.AppendUint32(b, a.Mode)
+	b = binary.LittleEndian.AppendUint32(b, a.Uid)
+	b = binary.LittleEndian.AppendUint32(b, a.Gid)
+	b = binary.LittleEndian.AppendUint64(b, uint64(a.Atime))    //nolint:gosec // a time's bits
+	return binary.LittleEndian.AppendUint64(b, uint64(a.Mtime)) //nolint:gosec // a time's bits
+}
+
+func decodeAttrs(mask uint64, data []byte) (meta.CommitAttrs, bool) {
+	const known = meta.AttrMode | meta.AttrUid | meta.AttrGid | meta.AttrAtime | meta.AttrMtime
+	if len(data) != attrsDataLen || mask == 0 || mask&^uint64(known) != 0 {
+		return meta.CommitAttrs{}, false
+	}
+	return meta.CommitAttrs{
+		Mask: uint8(mask), Mode: binary.LittleEndian.Uint32(data), Uid: binary.LittleEndian.Uint32(data[4:]), Gid: binary.LittleEndian.Uint32(data[8:]),
+		Atime: int64(binary.LittleEndian.Uint64(data[12:])), Mtime: int64(binary.LittleEndian.Uint64(data[20:])), //nolint:gosec // a time's bits
+	}, true
 }

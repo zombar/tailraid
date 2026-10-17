@@ -325,7 +325,7 @@ Besides the cluster view (docs/06 §7), `tailraid status --json` carries what a 
 needs watched: `process.heap_inuse`, `process.sys` and `process.goroutines` from the Go
 runtime, and on the gateway `gateway.plan_bytes` (dirty bytes in flushes under way),
 `gateway.flush_bytes` (chunk and shard buffers held by the flusher, docs/04 §9),
-`gateway.wal_cap` and `gateway.last_flush_err`, the stage (docs/04 §3, I-398): `gateway.staged` (bytes acknowledged here and not yet committed, dirty and in flushes under way), `gateway.stage` (how many it accepts ahead of the cluster), `gateway.flushed_bytes` (cumulative bytes the flusher committed) and `gateway.drain_rate` (bytes a second over the last minute), and the reader's readahead (docs/04 §5):
+`gateway.wal_cap` and `gateway.last_flush_err`, the stage (docs/04 §3, I-398): `gateway.staged` (bytes acknowledged here and not yet committed, dirty and in flushes under way), `gateway.stage` (how many it accepts ahead of the cluster), `gateway.flushed_bytes` (cumulative bytes the flusher committed) and `gateway.drain_rate` (bytes a second over the last minute), the metadata it proposed (docs/04 §6, I-403): `gateway.proposals` (by op since start, `create`, `setattr`, `commit`, …) and `gateway.attrs_deferred` (SETATTRs held for a file's flush instead of proposed), and the reader's readahead (docs/04 §5):
 `gateway.readahead_fetched` (chunks a prefetch fetched), `gateway.readahead_joined`
 (client READs served by a chunk a prefetch fetched or was fetching),
 `gateway.readahead_cancelled` (prefetches cut because their client seeked away, 04 §5,
