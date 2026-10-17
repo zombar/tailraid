@@ -395,7 +395,7 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 	if plan.SizeSet {
 		partial = false // truncates are never partially flushed
 	}
-	newSize, err := f.commitPlan(ctx, plan, partial)
+	newSize, carried, err := f.commitPlan(ctx, plan, partial)
 	if err != nil {
 		if errors.Is(err, meta.ErrNotExist) {
 			f.ov.Drop(ino)
@@ -431,23 +431,25 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 		return err
 	}
 	f.ov.NoteFlush(ino, nil) // before CommitFlushed, which may evict the entry
-	f.restoreTimes(ctx, ino)
+	if len(plan.Residual) == 0 && !carried {
+		f.restoreAttrs(ctx, plan) // an older member: the attributes after the Commit (I-401)
+	}
 	f.flushed.Add(plan.Extents.bytes() - plan.Residual.bytes())
 	return f.ov.CommitFlushed(plan, newSize)
 }
 
-// restoreTimes sets again the times a client set on ino after its last write, which the
-// Commit just stamped over with its own (I-230): a copy's source times, set as its last
-// step, outlive the flush. A failure leaves the flush's time and is logged; the data is
-// committed either way.
-func (f *Flusher) restoreTimes(ctx context.Context, ino meta.Ino) {
-	atime, mtime, ok := f.ov.UserTimes(ino)
-	if !ok {
+// restoreAttrs proposes the attributes a client set on a dirty file as a SetAttr after
+// its Commit, which stamped its own times: what a Commit carries itself once every live
+// member reads codec 16 (I-401, I-230). A failure leaves the Commit's and is logged; the
+// data is committed either way.
+func (f *Flusher) restoreAttrs(ctx context.Context, plan *FlushPlan) {
+	a := f.ov.PlanAttrs(plan)
+	if a.Mask == 0 {
 		return
 	}
-	sa := &meta.SetAttr{Ino: ino, Mask: meta.AttrAtime | meta.AttrMtime, Atime: atime, Mtime: mtime, Now: f.clk.Now().UnixNano()}
-	if _, _, err := f.prop.Propose(ctx, f.actorCommand(f.ov.Actor(ino), meta.Command{Op: meta.OpSetAttr, SetAttr: sa})); err != nil && f.log != nil {
-		f.log.Warn("a client's file times were not set again after the flush", "ino", ino, "err", err)
+	sa := &meta.SetAttr{Ino: plan.Ino, Mask: a.Mask, Mode: a.Mode, Uid: a.Uid, Gid: a.Gid, Atime: a.Atime, Mtime: a.Mtime, Now: f.clk.Now().UnixNano()}
+	if _, _, err := f.prop.Propose(ctx, f.actorCommand(plan.Actor, meta.Command{Op: meta.OpSetAttr, SetAttr: sa})); err != nil && f.log != nil {
+		f.log.Warn("a client's file attributes were not set after the flush", "ino", plan.Ino, "err", err)
 	}
 }
 
@@ -493,12 +495,12 @@ type chunkWork struct {
 }
 
 // commitPlan runs steps 2–11 for a plan, including rebases, and returns the committed size.
-func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool) (uint64, error) {
+func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool) (newSize uint64, carried bool, err error) {
 	forceUpload := false
 	for range 16 {
 		base, ok := f.st.GetInodeAny(plan.Ino) // a file deleted while dirty commits into its trash entry (L-203)
 		if !ok || base.Type != meta.TFile {
-			return 0, meta.ErrNotExist
+			return 0, false, meta.ErrNotExist
 		}
 		// the size this flush works against follows the base of this attempt: another
 		// gateway may have grown or shrunk the file since the entry was created (L-178)
@@ -508,19 +510,20 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 		// a retry would cost a plan's worth of memory per inode (I-78)
 		works, err := f.process(ctx, plan, base, idxs, forceUpload)
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		if f.Hooks.AfterAllShardsAcked != nil {
 			f.Hooks.AfterAllShardsAcked()
 		}
 		var (
-			cmd    *meta.Commit
-			res    meta.Result
-			index  uint64
-			noSums bool
+			cmd     *meta.Commit
+			res     meta.Result
+			index   uint64
+			noSums  bool
+			noAttrs bool
 		)
 		for {
-			cmd = f.buildCommit(plan, base, works, partial || limited, noSums)
+			cmd = f.buildCommit(plan, base, works, partial || limited, noSums, noAttrs)
 			if f.Hooks.BeforeCommit != nil {
 				f.Hooks.BeforeCommit()
 			}
@@ -529,7 +532,13 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 			res, index, perr = f.prop.Propose(pctx, f.actorCommand(plan.Actor, meta.Command{Op: meta.OpCommit, Commit: cmd}))
 			cancel()
 			if perr != nil {
-				return 0, fmt.Errorf("propose commit: %w", perr)
+				return 0, false, fmt.Errorf("propose commit: %w", perr)
+			}
+			if errors.Is(res.Err, meta.ErrCodec) && !noAttrs && cmd.Attrs.Mask != 0 {
+				// the leader sees a member that reads no codec 16: the attributes go in a
+				// SetAttr after the Commit instead (I-401)
+				noAttrs = true
+				continue
 			}
 			if errors.Is(res.Err, meta.ErrCodec) && !noSums && (carriesSums(cmd) || cmd.Rewrite != 0 || cmd.RewriteStart) {
 				// the leader sees a member older than this gateway does (a rolling
@@ -551,7 +560,7 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 				f.Hooks.AfterRaftCommit()
 			}
 			if err := f.st.WaitApplied(ctx, index); err != nil {
-				return 0, err
+				return 0, false, err
 			}
 			for _, w := range works {
 				if !w.hole {
@@ -559,7 +568,7 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 				}
 			}
 			f.forgetPlaced(works)
-			return cmd.NewSize, nil
+			return cmd.NewSize, cmd.Attrs.Mask != 0, nil
 		case errors.Is(res.Err, meta.ErrConflict):
 			f.log.Info("commit conflict, rebasing", "ino", plan.Ino)
 			continue
@@ -574,16 +583,16 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 			continue
 		case errors.Is(res.Err, meta.ErrNeedTailRewrite):
 			f.log.Error("commit rejected: tail rewrite missing (bug)", "ino", plan.Ino)
-			return 0, res.Err
+			return 0, false, res.Err
 		case errors.Is(res.Err, meta.ErrNotExist), errors.Is(res.Err, meta.ErrIsDir):
-			return 0, meta.ErrNotExist
+			return 0, false, meta.ErrNotExist
 		case errors.Is(res.Err, meta.ErrSuperseded):
-			return 0, meta.ErrSuperseded
+			return 0, false, meta.ErrSuperseded
 		default:
-			return 0, fmt.Errorf("commit rejected: %w", res.Err)
+			return 0, false, fmt.Errorf("commit rejected: %w", res.Err)
 		}
 	}
-	return 0, errRebaseLimit
+	return 0, false, errRebaseLimit
 }
 
 // touched computes the touched chunk set (step 3) in index order and cuts it to one batch
@@ -1061,7 +1070,7 @@ func (f *Flusher) fillSlots(ctx context.Context, w *chunkWork, data []byte, c me
 // buildCommit assembles the Commit command (step 10) including the NewSize rules. partial
 // covers both the FileDirtyHi trigger and a plan cut to one batch (I-80): either way only
 // the chunks in works are committed and the rest of the plan stays dirty.
-func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWork, partial, noSums bool) *meta.Commit {
+func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWork, partial, noSums, noAttrs bool) *meta.Commit {
 	cs := uint64(f.st.Volume().ChunkSize)
 	cmd := &meta.Commit{Ino: plan.Ino, BaseVersion: base.Version, Now: f.clk.Now().UnixNano()}
 	if !noSums { // noSums also marks a leader that refused codec 9: then a plain write
@@ -1109,5 +1118,8 @@ func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWo
 		}
 	}
 	cmd.Writes = kept
+	if !partial && !noAttrs && (f.MinCodec == nil || f.MinCodec() >= meta.CodecAttrs) {
+		cmd.Attrs = f.ov.PlanAttrs(plan) // only the Commit that leaves the file clean (I-401)
+	}
 	return cmd
 }

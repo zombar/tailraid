@@ -74,6 +74,12 @@ const (
 	// commandVersionV15: SnapshotHeal (docs/16 §5, I-393); an older binary does not know
 	// the op.
 	commandVersionV15 = 15
+	// commandVersionV16: a Commit with Attrs (docs/04 §6, I-401); an older binary would
+	// misparse the fields.
+	commandVersionV16 = 16
+	// CodecAttrs is the codec every live member must read before a flush's Commit carries
+	// a client's attributes (docs/02 §Codec versions).
+	CodecAttrs = commandVersionV16
 	// CodecHeal is the codec every live member must read before the mirror's host
 	// proposes a heal (docs/02 §Codec versions).
 	CodecHeal = commandVersionV15
@@ -102,7 +108,7 @@ const (
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 15
+	CodecVersion = 16
 )
 
 // SetAttr mask bits.
@@ -229,6 +235,10 @@ type (
 		// Commit with neither is a plain write (codec 9, docs/04 §6, I-223).
 		Rewrite      uint64
 		RewriteStart bool
+		// Attrs are the mode, owner and times a client set on the file while its data was
+		// dirty on the gateway, applied after the Commit's own stamp (codec 16, docs/04 §6,
+		// I-401); a zero mask carries none.
+		Attrs CommitAttrs
 	}
 	SetPlacement struct {
 		Hash      Hash
@@ -425,6 +435,22 @@ func needsV7(c Command) bool {
 	return false
 }
 
+// CommitAttrs is what a client set on a dirty file: a mask of AttrMode, AttrUid, AttrGid,
+// AttrAtime and AttrMtime and their values, as SetAttr carries them.
+type CommitAttrs struct {
+	Mask         uint8
+	Mode         uint32
+	Uid, Gid     uint32
+	Atime, Mtime int64
+}
+
+// commitAttrMask is every bit a Commit's attributes may carry: no flags, which are a
+// directory's.
+const commitAttrMask = AttrMode | AttrUid | AttrGid | AttrAtime | AttrMtime
+
+// needsV16 reports whether c is a Commit carrying a client's attributes (I-401).
+func needsV16(c Command) bool { return c.Op == OpCommit && c.Commit != nil && c.Commit.Attrs.Mask != 0 }
+
 // needsV15 reports whether c is a snapshot heal (docs/16 §5): an older binary cannot
 // decode the op, so the leader refuses it while such a member is live (I-391).
 func needsV15(c Command) bool { return c.Op == OpSnapshotHeal }
@@ -525,6 +551,8 @@ func baseCodec(c Command) uint8 {
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
+	case needsV16(c):
+		return commandVersionV16
 	case needsV15(c):
 		return commandVersionV15
 	case needsV11(c):
@@ -567,8 +595,8 @@ func encodeCommand(c Command) []byte {
 
 // encodeBody writes the version byte, the op and the payload in version v.
 func encodeBody(w *writer, c Command, v uint8) {
-	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4 || v == commandVersionV6 || v == commandVersionV10, v == commandVersionV5 || v == commandVersionV9
-	v9 := v == commandVersionV9
+	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4 || v == commandVersionV6 || v == commandVersionV10, v == commandVersionV5 || v == commandVersionV9 || v == commandVersionV16
+	v9 := v == commandVersionV9 || v == commandVersionV16
 	v2 := v == commandVersionV2 || v == commandVersionV7 // a mirror row carries its Host as a disk row does
 	w.u8(v)
 	w.u8(uint8(c.Op))
@@ -671,6 +699,18 @@ func encodeBody(w *writer, c Command, v uint8) {
 		if v9 {
 			w.u64(p.Rewrite)
 			w.bool(p.RewriteStart)
+		}
+		if v == commandVersionV16 {
+			a := p.Attrs
+			if a.Mask&^commitAttrMask != 0 {
+				panic(fmt.Sprintf("commit attributes mask %#x", a.Mask))
+			}
+			w.u8(a.Mask)
+			w.u32(a.Mode)
+			w.u32(a.Uid)
+			w.u32(a.Gid)
+			w.i64(a.Atime)
+			w.i64(a.Mtime)
 		}
 	case OpSetShardSums:
 		p := mustPayload(c.SetShardSums, c.Op)
@@ -798,7 +838,7 @@ func DecodeCommand(b []byte) (Command, error) {
 		c.System = r.bool()
 		v = r.u8()
 	}
-	if r.err == nil && (v < commandVersion || v > commandVersionV15 || v == 12 || v == 13 || (v == commandVersionV14 && !wrapped)) { // 12 is sealed S3's, never written yet; 13 was the withdrawn mesh
+	if r.err == nil && (v < commandVersion || v > commandVersionV16 || v == 12 || v == 13 || (v == commandVersionV14 && !wrapped)) { // 12 is sealed S3's, never written yet; 13 was the withdrawn mesh
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -833,6 +873,8 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = isUsersOp(c.Op) || c.Op == OpSecretPut
 	case commandVersionV15:
 		legal = c.Op == OpSnapshotHeal
+	case commandVersionV16:
+		legal = c.Op == OpCommit
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums &&
 			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete && c.Op != OpSnapshotImport &&
@@ -903,16 +945,22 @@ func DecodeCommand(b []byte) (Command, error) {
 			p.NewChunks = make([]ChunkDesc, n)
 			for i := range p.NewChunks {
 				p.NewChunks[i] = ChunkDesc{Hash: r.hash(), Size: r.u32(), K: r.u8(), M: r.u8(), Placement: r.nodeIdxs()}
-				if v == commandVersionV5 || v == commandVersionV9 {
+				if v == commandVersionV5 || v == commandVersionV9 || v == commandVersionV16 {
 					p.NewChunks[i].Sums = r.hashes()
 				}
 			}
 		}
 		p.Now = r.i64()
-		if v == commandVersionV9 {
+		if v == commandVersionV9 || v == commandVersionV16 {
 			p.Rewrite, p.RewriteStart = r.u64(), r.bool()
-			if r.err == nil && p.Rewrite == 0 && !p.RewriteStart {
+			if r.err == nil && v == commandVersionV9 && p.Rewrite == 0 && !p.RewriteStart {
 				return c, fmt.Errorf("meta: Commit in command version 9 without a rewrite") // canonical bytes (I-22)
+			}
+		}
+		if v == commandVersionV16 {
+			p.Attrs = CommitAttrs{Mask: r.u8(), Mode: r.u32(), Uid: r.u32(), Gid: r.u32(), Atime: r.i64(), Mtime: r.i64()}
+			if r.err == nil && (p.Attrs.Mask == 0 || p.Attrs.Mask&^commitAttrMask != 0) {
+				return c, fmt.Errorf("meta: Commit in command version 16 with attribute mask %#x", p.Attrs.Mask) // canonical bytes (I-22)
 			}
 		}
 		c.Commit = p

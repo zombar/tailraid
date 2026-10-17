@@ -99,7 +99,7 @@ func (f *Flusher) commitChunks(ctx context.Context, actor meta.UserIdx, ino meta
 		}
 		uploaded = int(up.Load())
 		// a truncate to zero, then the chunks: buildCommit's truncate case sizes it to size
-		cmd := f.buildCommit(&FlushPlan{Ino: ino, Size: size, SizeSet: true}, base, works, false, noSums)
+		cmd := f.buildCommit(&FlushPlan{Ino: ino, Size: size, SizeSet: true}, base, works, false, noSums, true) // a restore carries no client attributes
 		pctx, cancel := context.WithTimeout(ctx, f.cfg.ProposeTimeout)
 		res, index, perr := f.prop.Propose(pctx, f.actorCommand(actor, meta.Command{Op: meta.OpCommit, Commit: cmd}))
 		cancel()

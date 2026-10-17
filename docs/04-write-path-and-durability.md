@@ -461,9 +461,15 @@ request context and read through `ReadAt`.
   `attrs` record, fsynced before the reply, so an acknowledged SETATTR survives a crash
   like an acknowledged WRITE), this gateway's GETATTR shows it at once, and the flush's
   Commit carries it (`Commit.Attrs`, codec 16), applied after the Commit stamps its own
-  mtime and ctime. A later write or truncate drops the pending times, being newer than
-  they are, but keeps the mode and owner; a flush that fails keeps them pending, and a
-  flush whose data is dropped (superseded, refused, the file gone) drops them with it.
+  mtime and ctime. Only the Commit that leaves the file clean carries them: a partial
+  Commit (a batch of a large file, I-80) would have its successors stamp over the source's
+  times, so it leaves them held. A SETATTR is held only for the writer the flush acts for
+  and only while that caller holds Write: anyone else's is proposed, and the FSM judges
+  it. A later write or truncate drops the pending times, being newer than they are, but
+  keeps the mode and owner; a flush that fails keeps them pending, and a flush whose data
+  is dropped (superseded, refused, the file gone) drops them with it. A held attribute
+  never pins the WAL: each segment rotation writes what is held into the new segment's
+  first records, and a compaction writes it out, so the old segments still go (I-397).
   Other gateways see the new mode, owner and times with the data, at the flush (within
   the idle timer after the copy pauses, §3), and until then the create's. A SETATTR on a
   file with nothing dirty here, or one with a size, is proposed as before, and one that
@@ -748,7 +754,7 @@ the WAL cap.
 | I-98 | `TestReader_HedgesStalledHolder` |
 | I-261 | `TestVFS_DirtyFile_ReportsItsWriteTime` |
 | I-230 | `TestVFS_UserTimes_SurviveFlush`, `TestSMB_CopyTimes_SurviveFlush` |
-| I-401 | `TestStub_I_401` |
-| I-402 | `TestStub_I_402` |
-| I-403 | `TestStub_I_403` |
+| I-401 | `TestEncodeCommand_V16Attrs`, `TestFSM_Commit_AppliesAttrs`, `TestOverlay_HoldAttrs_DirtyOnly`, `TestOverlay_HoldAttrs_WriteDropsTimes`, `TestOverlay_Attrs_CaptureCommitAbort`, `TestOverlay_Attrs_PinTheirSegment`, `TestVFS_CopyLandsWhole`, `TestCluster_AttrsLandWhileMemberOld` |
+| I-402 | `TestVFS_SetAttr_NoChangeNoProposal` |
+| I-403 | `TestVFS_CopyLandsWhole`, `TestGatewayReport_Proposals` |
 | I-101 | `TestWAL_FsyncFailureReopens`, `TestWAL_CompactReopenFailureClosesLog` |

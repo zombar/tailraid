@@ -184,11 +184,16 @@ type fsReq struct {
 	Data []byte `json:"data"`
 	Size int64  `json:"size"`
 	To   string `json:"to"`
+	// setattr: the mode and a time for atime and mtime, in nanoseconds (soak phase 34)
+	Mode  uint32 `json:"mode,omitempty"`
+	Mtime int64  `json:"mtime,omitempty"`
 }
 
 type fsResp struct {
 	Data  []byte   `json:"data,omitempty"`
 	Size  int64    `json:"size"`
+	Mode  uint32   `json:"mode,omitempty"`  // attrs
+	Mtime int64    `json:"mtime,omitempty"` // attrs, nanoseconds
 	Names []string `json:"names,omitempty"`
 	Hash  string   `json:"hash,omitempty"` // hex sha256 (op "hash")
 	Error string   `json:"error,omitempty"`
@@ -244,6 +249,19 @@ func (w *worker) doFSOn(t *nfsc.Target, req fsReq) (resp fsResp) {
 			return fail(err)
 		}
 		return fsResp{Data: data, Size: int64(len(data))}
+	case "setattr":
+		t3 := nfsc.NFS3Time{Seconds: uint32(req.Mtime / 1e9), Nseconds: uint32(req.Mtime % 1e9)} //nolint:gosec // a 2020s time
+		return fail(t.Setattr(req.Path, nfsc.Sattr3{
+			Mode:  nfsc.SetMode{SetIt: true, Mode: req.Mode},
+			Atime: nfsc.SetTime{SetIt: nfsc.SetToClientTime, Time: t3},
+			Mtime: nfsc.SetTime{SetIt: nfsc.SetToClientTime, Time: t3},
+		}))
+	case "attrs":
+		a, err := t.Getattr(req.Path)
+		if err != nil {
+			return fail(err)
+		}
+		return fsResp{Mode: a.FileMode & 0o7777, Mtime: int64(a.Mtime.Seconds)*1e9 + int64(a.Mtime.Nseconds), Size: int64(a.Filesize)} //nolint:gosec // a file's size
 	case "truncate":
 		return fail(t.Setattr(req.Path, nfsc.Sattr3{Size: nfsc.SetSize{SetIt: true, Size: uint64(req.Size)}}))
 	case "rename":

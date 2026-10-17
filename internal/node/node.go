@@ -265,7 +265,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if grace, _, err := cfg.RepairDurations(); err == nil {
 		flcfg.ReuseFor = grace / 2 // a reused shard stays well inside the sweep's grace (I-312)
 	}
-	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, clk, flcfg, log)
+	proposals := vfs.CountProposals(node) // what this gateway proposes, by op, for status (I-403)
+	fl := vfs.NewFlusher(ov, node.FSM, proposals, prober, client, rd, clk, flcfg, log)
 	fl.Events = ring
 	fl.Slow = func(n meta.NodeIdx) { prober.Slow(n) } // a PUT cut at the straggler grace holds its host slow (I-169, I-371)
 	fl.Held = prober.Held
@@ -273,7 +274,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if runtime.GOOS == "windows" {
 		uid, gid = 0, 0
 	}
-	fs := vfs.New(node.FSM, node, ov, rd, clk, uid, gid)
+	fs := vfs.New(node.FSM, proposals, ov, rd, clk, uid, gid)
 	var st staleness
 	fs.SetHealth(func() bool { return st.stale(node.Health(clk, prober).State, node.Raft.LastContact(), clk.Now()) })
 
@@ -435,7 +436,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		start := time.Now()
 		rep := admin.Build(node, prober, clusterID, clk, repairer)
 		rep.WalkMS = time.Since(start).Milliseconds()
-		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd).WithFS(fs)
+		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd).WithFS(fs).WithProposals(proposals)
 		if w := admin.StagedWarning(rep.Gateway); w != "" {
 			rep.Warnings = append(rep.Warnings, w)
 		}
