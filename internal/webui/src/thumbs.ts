@@ -144,6 +144,11 @@ export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: Sr
       else miss();
     });
   };
+  const wait = schedule(img, job);
+}
+
+/** schedule queues job in the fast lane once img is near the viewport, and returns how to put it back to waiting (scrolled away before its turn). */
+function schedule(img: HTMLImageElement, job: () => Promise<void>): () => void {
   const p: Pending = { img, job, queued: false };
   const wait = () => {
     if (!observer) return;
@@ -156,6 +161,27 @@ export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: Sr
     p.queued = true;
     fast.push(job);
   }
+  return wait;
+}
+
+/** lazyURL shows the thumbnail at url in img once img is near the viewport, asked again while the node makes it (202) as a listing tile's is; onMiss runs when there is none (docs/13 §10). */
+export function lazyURL(img: HTMLImageElement, url: string, onMiss: () => void): void {
+  const settle = async (f: Fetched): Promise<void> => {
+    if (!f.src) {
+      if (img.isConnected) onMiss();
+      return;
+    }
+    if (!img.isConnected) return URL.revokeObjectURL(f.src);
+    return showBlob(img, f.src, onMiss);
+  };
+  schedule(img, async () => {
+    pending.delete(img);
+    observer?.unobserve(img);
+    if (!img.isConnected) return; // a redraw replaced the tile
+    const f = await load(url);
+    if (f.later !== undefined) return later(img, () => load(url), f.later, TRIES, settle);
+    return settle(f);
+  });
 }
 
 /** near reports whether img is within the observer's margin of the viewport. */

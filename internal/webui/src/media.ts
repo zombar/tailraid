@@ -7,7 +7,7 @@
 import { clear, h, titleCard } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { fileURL, media, mediaItem, thumbURL, type MediaFile, type MediaItem, type MediaLibrary } from "./api.ts";
-import { lazy } from "./thumbs.ts";
+import { lazy, lazyURL } from "./thumbs.ts";
 import { basename, browseHash, bytes, count, dirname, encodePathForHash, fileHash, session } from "./util.ts";
 
 const NOUN: Record<string, [string, string]> = { movies: ["film", "films"], tv: ["show", "shows"], music: ["album", "albums"], roms: ["platform", "platforms"] };
@@ -99,8 +99,8 @@ function posterTile(it: MediaItem): HTMLElement {
   const frame = h("img", { alt: "" }) as HTMLImageElement;
   if (frameOf(frame, it, missing)) box.append(frame);
   else if (src) {
-    const img = h("img", { alt: "", loading: "lazy", src }) as HTMLImageElement;
-    img.addEventListener("error", missing);
+    const img = h("img", { alt: "" }) as HTMLImageElement; // a thumbnail still being made answers 202: fetched as a listing tile's (I-374)
+    lazyURL(img, src, missing);
     box.append(img);
   } else missing();
   if (chip && !box.contains(chip)) box.append(chip);
