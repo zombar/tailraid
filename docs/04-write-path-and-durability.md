@@ -81,50 +81,80 @@ Extent-set semantics (all O(log n + k) on the sorted slice):
 
 ### 2.1 WAL record layout
 
-One file per dirty inode at `<data_dir>/staging/<ino>.wal`, append-only:
+An inode's log is a run of **segment** files under `<data_dir>/staging/`: segment 0 is
+`<ino>.wal` (the single file of releases before segments, read as segment 0), segment n is
+`<ino>.<n>.wal`. Records are appended to the newest segment, the *head*:
 
 ```
 record := crc32c u32 | type u8 | off u64 | len u32 | data[len]
-type    := 1 = write (data follows), 2 = truncate (len = 0, off = new size)
+type    := 1 write    off = file offset, data = the bytes
+           2 truncate off = new size, len = 0
+           3 base     off = committed size the following records apply to, len = 0
+           4 actor    off = the user whose writes follow (docs/21 §4), len = 0
+           5 state    off = overlay size; data = minSize u64 | sizeSet u8: the inode's size
+                      and truncate state when this segment began (its first record)
+           6 clean    off = W, the log position when the committed plan was captured;
+                      data = size u64 | minSize u64 | sizeSet u8 | ranges u32 | (start u64,
+                      end u64)…: the file ranges a Commit made durable and the inode's state
+                      after it
 ```
 
-`crc32c` covers `type|off|len|data`. All integers little-endian.
+`crc32c` covers `type|off|len|data`. All integers little-endian. A *log position* is
+`n·2⁴⁰ + offset` in segment n, so positions grow across segments and an extent's `walOff`
+names its segment.
 
 ```go
-type WAL struct { fs sysfs.FS; f sysfs.File; off int64 }
-func openWAL(fs sysfs.FS, path string) (*WAL, error)                       // a new file's directory entry is fsynced before it is used
+type WAL struct { fs sysfs.FS; dir string; ino meta.Ino; head sysfs.File; segs []segment }
+func openWAL(fs sysfs.FS, dir string, ino meta.Ino) (*WAL, error)            // a new segment's directory entry is fsynced before it is used
 func (w *WAL) AppendWrite(off uint64, p []byte) (walOff int64, err error)   // write + f.Sync()
 func (w *WAL) AppendTruncate(size uint64) error                             // + f.Sync()
-func (w *WAL) ReadAt(p []byte, walOff int64) error
+func (w *WAL) AppendClean(c cleanRec) error                                 // + f.Sync()
+func (w *WAL) ReadAt(p []byte, walOff int64) error                          // from whichever segment holds walOff
 func (w *WAL) Replay(fn func(typ uint8, off uint64, data []byte, walOff int64) error) error
-func (w *WAL) Compact(live extents) (extents, error)                        // rewrite to a new file holding only live extents, fsync, rename
+func (w *WAL) DropBefore(pos int64) error                                   // remove every segment wholly below pos, oldest first
+func (w *WAL) Compact(recs []walRec) ([]int64, error)                       // write recs to a fresh segment, fsync, rename, drop the rest
 ```
 
 Rules:
 
-- `AppendWrite` and `AppendTruncate` return only after `f.Sync()` succeeds. There is no
-  "no-sync" mode: the struct has no such field, and tests that want speed put the staging
-  directory on a tmpfs or accept the cost. All file access goes through the `sysfs.FS`
-  seam so tests can inject a failed fsync or a crash at any step.
-- A WAL file is created on the first write to an inode, and its directory is fsynced before
-  the first record is appended: an acknowledged record never depends on a directory entry
-  that power loss could drop (I-63). After a failed fsync the un-synced record is cut back
-  off the file so a later crash cannot replay bytes that were never acknowledged (I-37).
-- A crash during `Compact` may leave `<ino>.wal.new`; `OpenOverlay` removes it (the old
-  log is a superset and replays correctly).
-- `Replay` reads records in order and **stops at the first record whose CRC fails or whose
-  length runs past EOF** (the torn tail from a crash mid-append). Everything before it is
-  replayed into the extent set; the file is then truncated to that point.
-- `Reset` happens when the extent set is empty after a successful flush. If the fresh
-  extent set is non-empty (writes arrived during the flush), `Compact` rewrites the WAL to
-  hold only the live extents, so a continuously written file never accumulates a WAL of
-  every byte ever written. The rewrite streams each live record from the old file to the
-  new one through one bounded buffer (1 MiB), never the whole live set at once, and reopens
-  the renamed file before it reports success: a failure after the rename leaves the inode
-  on the new file with correct record offsets, never on a closed handle (I-80).
-- A per-inode WAL larger than `4 × FileDirtyHi` (128 MiB by default) forces a flush of that
-  inode regardless of the idle timer.
-- `OpenOverlay` replays every `staging/*.wal` at startup, so a gateway that crashed with
+- `AppendWrite`, `AppendTruncate` and `AppendClean` return only after `f.Sync()` succeeds.
+  There is no "no-sync" mode: the struct has no such field, and tests that want speed put
+  the staging directory on a tmpfs or accept the cost. All file access goes through the
+  `sysfs.FS` seam so tests can inject a failed fsync or a crash at any step.
+- A segment file is created on the first write to an inode and whenever the head reaches
+  `SegmentSize` (64 MiB). Its directory is fsynced before the first record is appended,
+  so an acknowledged record never depends on a directory entry that power loss could drop
+  (I-63). A new head begins with a `state` record and, when a user wrote last, an `actor`
+  record; the head is rotated only once every record in it is fsynced, so a group-commit
+  fsync covers one file. After a failed fsync the un-synced records are cut back off the
+  head so a later crash cannot replay bytes that were never acknowledged (I-37).
+- `Replay` reads the segments in order and each **stops at the first record whose CRC
+  fails or whose length runs past EOF** (the torn tail from a crash mid-append); a torn
+  record ends the log, and any later segment is removed. Everything before it is replayed
+  into the extent set: a `base` resets the inode, a `state` initialises it only when no
+  earlier record did, and a `clean` drops every extent piece whose `walOff` is below its W
+  inside its ranges and sets the size and truncate state it carries.
+- **A committed flush appends, it does not copy** (I-397). `CommitFlushed` appends one
+  `clean` record naming the chunk ranges the Commit made durable, fsyncs it, then removes
+  every segment that lies wholly below the lowest live extent's position, oldest first, so
+  a crash leaves a suffix of the run that replays to the same state. A file written front to
+  back is flushed front to back, so its segments go in order and its log holds about the
+  dirty bytes plus one segment, whatever the file's size. When nothing is left dirty the
+  inode's segments are removed (`Reset`).
+- **Compaction** is for a region written over and over, where the extents stay few while the
+  log grows. It runs in `CommitFlushed` only when the dead bytes reach the live bytes plus
+  `CompactMin` (128 MiB) *and* the live bytes are at most `CompactMax` (128 MiB): the live
+  records are streamed through one bounded buffer (1 MiB) into a fresh segment, fsynced and
+  renamed into place, and the older segments are then removed oldest first. A crash after
+  the rename replays the old segments and then the new one, whose records rewrite the same
+  bytes, so either order of failure replays the same state; a stale `<ino>.<n>.wal.new` is
+  removed at open. A failure after the rename leaves the inode on the new segment with
+  correct record offsets, never on a closed handle (I-80). A WRITE therefore never waits on
+  a copy of more than `CompactMax` bytes; a log with more live bytes is never copied.
+- The flusher flushes an inode in full, regardless of the idle timer, when its log's dead
+  bytes reach its live bytes plus `CompactMin` (L-186), so a rewritten region's log stays
+  bounded, and a WRITE waits while the inode's log is at its cap (§3).
+- `OpenOverlay` replays every inode's segments at startup, so a gateway that crashed with
   dirty data comes back with the same overlay and flushes it.
 
 **Group commit.** `AppendWrite` is two steps: the record is written at the end of the log
@@ -151,11 +181,26 @@ previous one, one sorted insert. Nothing is held in memory but extents.
 |---|---|---|
 | inode idle (no WRITE for) | 2 s | flush that inode |
 | inode dirty bytes ≥ `FileDirtyHi` | 32 MiB | partial flush: its fully covered chunks now; the partial tail chunk stays dirty |
-| inode WAL file ≥ 4 × `FileDirtyHi` | 128 MiB | full flush of that inode (its WAL compacts); a WRITE that arrives while the WAL is at the cap **waits** (next row) |
+| inode log's dead bytes ≥ its live bytes + `CompactMin` | 128 MiB | full flush of that inode (its log compacts, §2.1, L-186) |
+| inode log ≥ `WALCap` | the stage, at least 128 MiB | a WRITE that arrives while the inode's log is at the cap **waits** (next row) |
 | total dirty bytes ≥ `TotalDirtyHi` | 256 MiB | flush the largest inodes until below |
-| total dirty bytes ≥ `MaxDirty` (fresh **and** in-flight plan bytes) | 1 GiB | a WRITE **waits** (next row) while the overlay holds `MaxDirty` or more dirty bytes; existing dirty data is intact and drains through the triggers above |
+| total dirty bytes ≥ `MaxDirty`, **the stage** (fresh **and** in-flight plan bytes) | `staging.size`, else a quarter of the free bytes of the staging directory's filesystem, at least 1 GiB (I-396) | a WRITE **waits** (next row) while the overlay holds `MaxDirty` or more dirty bytes; existing dirty data is intact and drains through the triggers above |
+| the staging filesystem's free bytes < `StageReserve` | 2 % of its size, at least 1 GiB | a WRITE **waits** (next row) until flushes free room; the free bytes are read at most once a second (I-396) |
 | a WRITE meets the WAL cap or `MaxDirty` | `CapWait` 20 s | the WRITE blocks until the flusher frees room (a Commit applied, an inode evicted) and then proceeds; it fails only when `CapWait` expires (`NFS3ERR_IO`, `EIO`) or, at once with `ENOSPC`, when that inode's last flush attempt failed because the cluster is full (L-189); any other flush failure (a leader or peer restarting, a codec refusal) is waited out like a slow flush (L-219), so a client that outruns replication is throttled to it rather than told the disk is broken (I-79). The waiting WRITE holds one of its connection's `InFlight` request slots (docs/07, I-167); `CapWait` is shorter than the clients' soft-mount timeouts (docs/07) |
 | shutdown | 30 s (`ShutdownFlush`) | `FlushAll` with that deadline, then exit; whatever did not flush stays in the WAL and flushes on the next start |
+
+**The stage.** `MaxDirty` is how much a gateway accepts ahead of the cluster: a copy runs
+at the speed of the local disk until the stage is full, then at the speed the flusher drains
+it. It is `staging.size` when the config sets it, otherwise a quarter of the free bytes of
+the filesystem holding `<data_dir>/staging` when the overlay opens (the bytes its logs
+already hold counted as free), never under 1 GiB; the per-inode cap `WALCap` is the stage,
+never under 128 MiB, so one large file may use the whole stage (I-396). Staged bytes are
+acknowledged and durable on this host's disk only: until the flusher commits them, losing
+that disk loses them, as for any acknowledged write (§8). `status` shows them as
+`gateway.staged` with the stage and the drain rate, the dashboard as a "staged" row with
+the time to drain, and `check` warns while more than 1 GiB is staged (docs/12 §8, I-398).
+`update --restart` waits for the stage to drain (I-221), so a large stage lengthens that
+wait; `--now` skips it.
 
 Flush workers run per inode from a bounded pool (default 4) so a big copy does not starve
 small files; across all of them at most `ChunkWorkers` (default 8) chunks are in memory at
@@ -519,9 +564,9 @@ of it is dirty. Dirty bytes live in the WAL on disk (§2); what the process hold
 | NFS requests in flight | each request's frame, read whole before its handler runs (docs/07, I-167) | connections × `InFlight` (16) × `MaxFrame` (1 MiB + 8 KiB) | the reply |
 | web upload in flight | one chunk-sized buffer per upload | `uploadSlots` (4) × ChunkSize | the response (docs/13 §4) |
 | WAL append | one record copy per WRITE in flight | connections × `InFlight` × wsize (docs/07) | its fsync |
-| overlay bookkeeping | 24 B per extent | WALCap / wsize extents per inode | compaction |
+| overlay bookkeeping | 24 B per extent; a WRITE past the last extent appends without copying the set (I-399) | stage / wsize extents (about 1.2 MiB at a 50 GiB stage and 1 MiB writes) | the Commit that cleans them |
 | flush: assemble + encode | the chunk and its `(k+m)` shards, per chunk in the pipeline | `ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k))` = 8 × 10 MiB = **80 MiB** at 4 MiB and (2,1) | the chunk being decided (step 9) |
-| compaction | one streaming buffer | 1 MiB | the rewrite |
+| compaction | one streaming buffer, over at most `CompactMax` live bytes | 1 MiB | the rewrite |
 | shard RPC server | the whole body of each in-flight PUT or GET | `slots × MaxShard ≤ 256 MiB` (32 at 4 MiB, 4 at 64 MiB) | the reply |
 | read cache, memory tier | hot decoded chunks | 64 MiB | LRU |
 | read cache, disk writes | chunks whose file is still being written behind the Put (01 §Local chunk cache, I-204) | `CacheQueue × ChunkSize` = 8 × 4 MiB = **32 MiB** | the write |
@@ -564,7 +609,11 @@ the WAL cap.
 - **I-63** — A WRITE is acknowledged only when every file its durability depends on has a durable directory entry: a newly created WAL file's directory is fsynced before its first record is appended.
 - **I-78** — The bytes a gateway holds in memory for flushing are bounded independently of file and plan size: at most `ChunkWorkers` chunks are assembled at once, a chunk's buffer and shards are released once its PUTs are decided (acked, failed or cancelled), a Commit retry re-assembles from the WAL, and `Flusher.Buffers()` never exceeds `ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k))`.
 - **I-79** — A WRITE that meets the per-inode WAL cap or the gateway dirty-byte cap waits for the flusher up to `CapWait` and succeeds as soon as the cap clears; it fails with `EIO` only when `CapWait` expires, and with `ENOSPC` at once only when that inode's last flush attempt failed because the cluster is full; any other flush failure is waited out; acknowledged bytes are never affected by the wait or the failure.
-- **I-80** — A flush commits at most `FileDirtyHi` bytes of chunks per Commit and leaves the rest dirty as residual; the gateway's total dirty count includes the bytes of outstanding plans; compaction streams live records through a bounded buffer and leaves the inode on an open, correctly indexed WAL even when a step after the rename fails; a per-inode WAL file never exceeds `WALCap` plus one record.
+- **I-80** — A flush commits at most `FileDirtyHi` bytes of chunks per Commit and leaves the rest dirty as residual; the gateway's total dirty count includes the bytes of outstanding plans; compaction streams live records through a bounded buffer and leaves the inode on an open, correctly indexed WAL even when a step after the rename fails; a per-inode log never exceeds `WALCap` plus one record and one segment.
+- **I-396** — The stage (`MaxDirty`) is `staging.size` when set, otherwise a quarter of the free bytes of the staging directory's filesystem at open, the bytes its logs hold counted as free, and never under 1 GiB; `WALCap` is the stage, never under 128 MiB; a WRITE also waits (I-79) while that filesystem's free bytes are under `StageReserve` (2 % of its size, at least 1 GiB), read at most once a second.
+- **I-397** — A committed flush appends a `clean` record and copies no record: after it the log replays to exactly the overlay's state, the segments wholly below the lowest live extent are removed oldest first, and a file written and flushed front to back keeps a log of at most its dirty bytes plus two segments; a compaction runs only when the dead bytes reach the live bytes plus `CompactMin` and the live bytes are at most `CompactMax`, so no WRITE waits on a copy of more than `CompactMax` bytes; a crash at any step of an append, a rotation, a clean, a removal or a compaction replays to the acknowledged bytes (I-37).
+- **I-398** — `status` reports `gateway.staged` (dirty and plan bytes), `gateway.stage`, `gateway.flushed_bytes` (cumulative bytes the flusher committed) and `gateway.drain_rate` (bytes a second over the last minute); the CLI and the dashboard show the staged bytes with the time to drain at that rate, and `check` warns while more than 1 GiB is staged.
+- **I-399** — An extent insert past the last extent appends in place: a run of sequential WRITEs costs O(1) amortised each, never a copy of the extent set.
 - **I-83** — A shard PUT's deadline scales with its size, the RPC server's concurrent PUT and GET slots satisfy `slots × MaxShard ≤ 256 MiB`, and a PUT whose slot was re-placed or whose chunk has been decided is cancelled and awaited, so no goroutine keeps a shard buffer alive past its chunk.
 - **I-98** — A chunk read returns as soon as k shards have arrived and cancels every GET
   it still has in flight (the hedged request and any slower holder), so a stuck holder
@@ -669,6 +718,10 @@ the WAL cap.
 | I-166 | `TestReader_Readahead_SequentialFillsCache`, `TestReader_Readahead_RandomReadDoesNotPrefetch`, `TestReader_Readahead_BoundedInFlight`, `TestReader_Readahead_ForegroundJoinsPrefetch`, `TestReader_Readahead_SkipsHashZeroAndCached`, `TestReader_Readahead_FailureIsInvisible`, `TestPhaseHotPath_ConformingGatewayPasses`, `TestPhaseHotPath_NonConformingGatewayFails`, `TestPhaseHotPath_OneGatewayUnmovedCountersSkip`, `TestReader_Readahead_SameChunkReadRetriesSkippedCandidates` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenClusterFull`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |
 | I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty`, `TestOverlay_TotalDirty_CountsPlanBytes`, `TestOverlay_TotalDirty_FollowsAbortAndDrop`, `TestWAL_Compact_StreamsThroughBoundedBuffer`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid` |
+| I-396 | `TestStub_I_396` |
+| I-397 | `TestStub_I_397` |
+| I-398 | `TestStub_I_398` |
+| I-399 | `TestStub_I_399` |
 | I-83 | `TestFlusher_StragglerPut_CancelledAfterReplace`, `TestClient_PutTimeout_Table`, `TestNode_SlotBudget_Table`, `TestChunkRPC_PutCancelled_NoShardLeft` |
 | I-98 | `TestReader_HedgesStalledHolder` |
 | I-261 | `TestVFS_DirtyFile_ReportsItsWriteTime` |

@@ -314,7 +314,7 @@ most once a minute and retried (I-176). Nothing reads the key but an operator.
 `mount.path`, `log.file`) and `Validate` refuses a listener port outside 1..65535 or
 shared between `listen.raft`, `listen.rpc`, `listen.nfs` and `listen.web`, an unknown
 `log.level` or `log.format`, a relative `mount.path`, the `mirrors` keys outside the bounds of §11, a `trash.retention` that is neither
-`0` nor at least an hour, a `cache.size` under 64 MiB and a `cache.system` that is not a size (§10); `serve` warns at start
+`0` nor at least an hour, a `cache.size` under 64 MiB, a `cache.system` that is not a size (§10) and a `staging.size` under 1 GiB (§8); `serve` warns at start
 when the config file or the data directory is readable by other users of the machine
 (I-126); the same check covers each disk and mirror and the owner of every path, and
 `status` and `check` on the device repeat the lines (I-341, docs/08 §Files on disk).
@@ -325,7 +325,7 @@ Besides the cluster view (docs/06 §7), `tailraid status --json` carries what a 
 needs watched: `process.heap_inuse`, `process.sys` and `process.goroutines` from the Go
 runtime, and on the gateway `gateway.plan_bytes` (dirty bytes in flushes under way),
 `gateway.flush_bytes` (chunk and shard buffers held by the flusher, docs/04 §9),
-`gateway.wal_cap` and `gateway.last_flush_err`, and the reader's readahead (docs/04 §5):
+`gateway.wal_cap` and `gateway.last_flush_err`, the stage (docs/04 §3, I-398): `gateway.staged` (bytes acknowledged here and not yet committed, dirty and in flushes under way), `gateway.stage` (how many it accepts ahead of the cluster), `gateway.flushed_bytes` (cumulative bytes the flusher committed) and `gateway.drain_rate` (bytes a second over the last minute), and the reader's readahead (docs/04 §5):
 `gateway.readahead_fetched` (chunks a prefetch fetched), `gateway.readahead_joined`
 (client READs served by a chunk a prefetch fetched or was fetching),
 `gateway.readahead_cancelled` (prefetches cut because their client seeked away, 04 §5,
@@ -339,6 +339,15 @@ count the chunks whose data-shard sums the last pass recorded and the chunks sti
 without them (06 §4, I-201). The soak sampler records them every second
 and the report charts the heap next to the WAL depth, so a memory regression under a
 large copy is a visible line, not a guess (I-84).
+
+**The stage.** A gateway accepts writes ahead of the cluster up to its stage (docs/04 §3):
+a quarter of the free space of the disk holding `node.data_dir` by default, at least
+1 GiB, or `staging.size` (`staging: {size: 200GiB}`, at least 1 GiB) to set it. A large
+copy then finishes at local disk speed and the flusher spreads it afterwards. While bytes
+are staged they are on this host's disk only, so plain `tailraid status` prints
+`staged 41.2 GiB on this host only, draining 38 MB/s, about 18 min`, the dashboard's
+Integrity section shows the same row, and `check` warns while more than 1 GiB is staged
+(I-398).
 
 **Machine vitals.** `status --json` also carries `machine`, what the operating system
 exposes about the node without a C library (the binary stays pure Go): the process's CPU
