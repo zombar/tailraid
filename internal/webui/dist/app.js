@@ -851,8 +851,6 @@ function bucketCard(s3, sh, scale) {
 }
 
 // internal/webui/src/integrity.ts
-var MAX_DIRTY = 256 * 1024 * 1024;
-var WAL_CAP = 128 * 1024 * 1024;
 function render3(root, r, history) {
   const v = r.volume;
   const tiles = h(
@@ -878,14 +876,22 @@ function render3(root, r, history) {
   const section2 = h("section", null, h("h2", null, "Integrity"), tiles, spark, repair(r));
   if (r.gateway) {
     const g = r.gateway;
+    const stage = g.stage || 1024 * 1024 * 1024;
     section2.append(
       h("h3", null, "Gateway"),
-      barRow("dirty bytes", bar(g.dirty_bytes / MAX_DIRTY, fillTone(g.dirty_bytes / MAX_DIRTY)), `${bytes(g.dirty_bytes)} in ${g.dirty_inodes} ${g.dirty_inodes === 1 ? "file" : "files"} of ${bytes(MAX_DIRTY)}` + (g.flushing ? " \xB7 flushing" : "")),
-      barRow("WAL", bar(g.wal_bytes / WAL_CAP, fillTone(g.wal_bytes / WAL_CAP)), `${bytes(g.wal_bytes)} of ${bytes(WAL_CAP)}`),
-      h("div", { class: "small dim" }, "acknowledged writes not yet committed to the cluster")
+      barRow("staged", bar(g.staged / stage, fillTone(g.staged / stage)), `${bytes(g.staged)} in ${g.dirty_inodes} ${g.dirty_inodes === 1 ? "file" : "files"} of ${bytes(stage)}` + drain(g.staged, g.drain_rate) + (g.flushing && !g.drain_rate ? " \xB7 flushing" : "")),
+      barRow("WAL", bar(g.wal_bytes / stage, fillTone(g.wal_bytes / stage)), `${bytes(g.wal_bytes)} of ${bytes(stage)} on disk`),
+      h("div", { class: "small dim" }, "acknowledged writes on this host's disk only, not yet spread to the cluster")
     );
   }
   root.append(section2);
+}
+function drain(staged, rate) {
+  if (!staged || !rate) return "";
+  const secs = staged / rate;
+  const mins = Math.round(secs / 60);
+  const eta = secs < 60 ? `${Math.floor(secs)} s` : mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min`;
+  return ` \xB7 draining ${bytes(rate)}/s \xB7 about ${eta}`;
 }
 function tile(label, value, sub, tone) {
   const zero = value === 0;

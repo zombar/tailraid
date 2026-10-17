@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,12 +30,25 @@ var ErrWALFull = errors.New("vfs: wal cap reached, flush required")
 // meta.MaxFileSize for the volume's chunk size (EFBIG to the client, I-64).
 var ErrFileTooLarge = errors.New("vfs: file would exceed the maximum size")
 
-// DefaultWALCap is 4 × FileDirtyHi (docs/04).
+// DefaultWALCap is the smallest per-inode log cap, 4 × FileDirtyHi (docs/04 §3); the cap
+// is the stage when that is larger (I-396).
 const DefaultWALCap int64 = 4 * 32 << 20
 
-// DefaultMaxDirty is the gateway-wide dirty-byte cap (docs/04 §3): at or above it a WRITE
-// waits for the flusher (DefaultCapWait) and then fails with EIO.
-const DefaultMaxDirty uint64 = 1 << 30
+// MinStage is the smallest stage, the gateway-wide dirty-byte cap (docs/04 §3): at or
+// above the stage a WRITE waits for the flusher (DefaultCapWait) and then fails with EIO.
+const MinStage uint64 = 1 << 30
+
+// MinStageReserve is the smallest free space a WRITE leaves on the staging filesystem; the
+// reserve is 2 % of its size when that is larger (I-396).
+const MinStageReserve uint64 = 1 << 30
+
+// CompactMin and CompactMax bound compaction (docs/04 §2.1, I-397): a commit copies the
+// live records only once the dead bytes reach the live bytes plus CompactMin, and never
+// more than CompactMax live bytes.
+const (
+	CompactMin int64 = 2 * SegmentSize
+	CompactMax int64 = 128 << 20
+)
 
 // DefaultCapWait is how long a WRITE that meets a cap waits for the flusher to free room
 // before it fails: inside every client's soft-mount timeout (docs/04 §3, docs/07, I-79).
@@ -49,8 +64,13 @@ type Option func(*Overlay)
 // WithWALCap sets the per-inode WAL size cap in bytes.
 func WithWALCap(n int64) Option { return func(o *Overlay) { o.walCap = n } }
 
-// WithMaxDirty sets the gateway-wide dirty-byte cap.
+// WithMaxDirty sets the stage, the gateway-wide dirty-byte cap (`staging.size`, I-396);
+// without it the stage derives from the staging filesystem's free bytes.
 func WithMaxDirty(n uint64) Option { return func(o *Overlay) { o.maxDirty = n } }
+
+// WithSegmentSize sets the head segment size at which a WRITE rotates the log
+// (SegmentSize by default, docs/04 §2.1).
+func WithSegmentSize(n int64) Option { return func(o *Overlay) { o.segMax = n } }
 
 // WithCapWait sets how long a WRITE waits at a cap; 0 fails at once.
 func WithCapWait(d time.Duration) Option { return func(o *Overlay) { o.capWait = d } }
@@ -90,6 +110,10 @@ type FlushPlan struct {
 	// Actor is the user whose writes the plan carries (docs/21 §4): the Commit acts for
 	// them; 0 before users, or for the node's own writer.
 	Actor meta.UserIdx
+
+	// walPos is the log position at capture: every extent of the plan lies below it and
+	// every fresh one above (docs/04 §2.1, I-397).
+	walPos int64
 }
 
 // dirtyFile is the per-inode overlay state. All fields are guarded by mu.
@@ -228,6 +252,15 @@ type Overlay struct {
 	capWait   time.Duration
 	fs        sysfs.FS
 
+	segMax     int64  // head segment size at which a WRITE rotates the log (docs/04 §2.1)
+	compactMin int64  // dead bytes over the live ones before a commit compacts (I-397)
+	compactMax int64  // the most live bytes a compaction copies (I-397)
+	reserve    uint64 // free bytes a WRITE leaves on the staging filesystem; 0 unknown (I-396)
+
+	fmu     sync.Mutex // guards freeAt and freeLow
+	freeAt  time.Time  // when the staging filesystem's free bytes were last read
+	freeLow bool       // they were under the reserve then
+
 	// Log, when set, reports what replay discarded after a crash (docs/04 §2); nil is
 	// silent (tests).
 	Log *slog.Logger
@@ -362,7 +395,8 @@ func OpenOverlay(dir string, chunkSize uint32, clk clock.Clock, opts ...Option) 
 		return nil, errors.New("vfs: chunk size must be > 0")
 	}
 	o := &Overlay{
-		dir: dir, chunkSize: chunkSize, clk: clk, walCap: DefaultWALCap, maxDirty: DefaultMaxDirty, capWait: DefaultCapWait,
+		dir: dir, chunkSize: chunkSize, clk: clk, capWait: DefaultCapWait,
+		segMax: SegmentSize, compactMin: CompactMin, compactMax: CompactMax,
 		fs: sysfs.OS{}, files: map[meta.Ino]*dirtyFile{}, progress: make(chan struct{}),
 	}
 	for _, opt := range opts {
@@ -375,9 +409,10 @@ func OpenOverlay(dir string, chunkSize uint32, clk clock.Clock, opts ...Option) 
 	if err != nil {
 		return nil, fmt.Errorf("vfs: overlay dir: %w", err)
 	}
+	inos := map[uint64]bool{}
 	for _, e := range ents {
 		name := e.Name()
-		if strings.HasSuffix(name, ".wal.new") { // a crash mid-Compact; the old log is a superset
+		if strings.HasSuffix(name, ".wal.new") { // a crash mid-Compact; the old segments replay alone
 			if err := o.fs.Remove(filepath.Join(dir, name)); err != nil {
 				return nil, fmt.Errorf("vfs: remove stale compaction temp: %w", err)
 			}
@@ -386,17 +421,75 @@ func OpenOverlay(dir string, chunkSize uint32, clk clock.Clock, opts ...Option) 
 		if e.IsDir() || !strings.HasSuffix(name, ".wal") {
 			continue
 		}
-		n, err := strconv.ParseUint(strings.TrimSuffix(name, ".wal"), 10, 64)
+		stem, _, _ := strings.Cut(strings.TrimSuffix(name, ".wal"), ".") // <ino>.wal or <ino>.<n>.wal
+		n, err := strconv.ParseUint(stem, 10, 64)
 		if err != nil {
 			continue
 		}
-		if err := o.replay(meta.Ino(n), filepath.Join(dir, name)); err != nil {
+		inos[n] = true
+	}
+	for _, n := range slices.Sorted(maps.Keys(inos)) {
+		if err := o.replay(meta.Ino(n), o.walPath(meta.Ino(n))); err != nil {
 			_ = o.Close()
 			return nil, err
 		}
 	}
+	o.sizeStage()
 	return o, nil
 }
+
+// walPath is segment 0's file of ino's log.
+func (o *Overlay) walPath(ino meta.Ino) string {
+	return filepath.Join(o.dir, strconv.FormatUint(uint64(ino), 10)+".wal")
+}
+
+// sizeStage derives the stage and the per-inode cap the options left unset, and the
+// reserve, from the staging filesystem (docs/04 §3, I-396): a quarter of its free bytes,
+// the logs it holds counted as free, never under MinStage.
+func (o *Overlay) sizeStage() {
+	free, total, err := o.fs.Free(o.dir)
+	if o.maxDirty == 0 {
+		o.maxDirty = MinStage
+		if err == nil {
+			var held uint64
+			for _, d := range o.files {
+				held += uint64(max(d.wal.Bytes(), 0))
+			}
+			o.maxDirty = max(MinStage, (free+held)/4)
+		}
+	}
+	if o.walCap == 0 {
+		o.walCap = max(DefaultWALCap, int64(min(o.maxDirty, math.MaxInt64))) //nolint:gosec // clamped
+	}
+	if err == nil {
+		o.reserve = max(MinStageReserve, total/50)
+	}
+}
+
+// stagingLow reports whether the staging filesystem is under its reserve, reading its
+// free bytes at most once a second (I-396). An unreadable filesystem is never low.
+func (o *Overlay) stagingLow() bool {
+	if o.reserve == 0 {
+		return false
+	}
+	o.fmu.Lock()
+	defer o.fmu.Unlock()
+	if now := o.clk.Now(); o.freeAt.IsZero() || now.Sub(o.freeAt) >= time.Second {
+		free, _, err := o.fs.Free(o.dir)
+		o.freeAt, o.freeLow = now, err == nil && free < o.reserve
+	}
+	return o.freeLow
+}
+
+// compactDue reports whether d's log holds enough dead bytes that a full flush should
+// compact it: the dead bytes reach the live ones plus CompactMin (L-186, I-397).
+func (o *Overlay) compactDue(d DirtyInfo) bool {
+	live := int64(min(d.DirtyBytes+d.PlanBytes, math.MaxInt64/4)) //nolint:gosec // clamped
+	return d.WALBytes-live >= live+o.compactMin
+}
+
+// Stage is the gateway-wide dirty-byte cap (docs/04 §3, I-396).
+func (o *Overlay) Stage() uint64 { return o.maxDirty }
 
 func (o *Overlay) replay(ino meta.Ino, path string) error {
 	w, err := openWAL(o.fs, path)
@@ -404,10 +497,21 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 		return err
 	}
 	d := &dirtyFile{ino: ino, wal: w, lastWrite: o.clk.Now()}
-	err = w.Replay(func(typ uint8, off uint64, n uint32, walOff int64, _ []byte) error {
+	err = w.Replay(func(typ uint8, off uint64, n uint32, walOff int64, data []byte) error {
 		switch typ {
 		case recBase:
 			d.known, d.size, d.minSize, d.sizeSet, d.ext = true, off, 0, false, nil
+		case recState:
+			// a segment's first record: it starts the inode only when the segments before
+			// it are gone (docs/04 §2.1)
+			if st, ok := decodeState(off, data); ok && !d.known {
+				d.known, d.size, d.minSize, d.sizeSet, d.ext = true, st.size, st.minSize, st.sizeSet, nil
+			}
+		case recClean:
+			if c, ok := decodeClean(off, data); ok && d.known {
+				d.ext = d.ext.cleaned(c.w, c.ranges)
+				d.size, d.minSize, d.sizeSet = c.st.size, c.st.minSize, c.st.sizeSet
+			}
 		case recWrite:
 			if !d.known {
 				return nil // records before a base are from a corrupt log; ignore
@@ -437,8 +541,7 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 	if !d.known || !d.dirty() {
 		// An empty log (crash between Reset and AppendBase) or a base record alone
 		// (crash between a clean Commit and the removal) carries no state.
-		_ = w.Close()
-		return o.fs.Remove(path)
+		return w.RemoveAll()
 	}
 	o.recount(d)
 	o.files[ino] = d
@@ -535,7 +638,7 @@ again:
 		// the WAL is opened (and its directory fsynced) outside the global lock: every
 		// lookup on every inode would otherwise wait on this fsync; a racing opener's
 		// handle to the same file is simply closed again
-		w, err := openWAL(o.fs, filepath.Join(o.dir, strconv.FormatUint(uint64(ino), 10)+".wal"))
+		w, err := openWAL(o.fs, o.walPath(ino))
 		if err != nil {
 			return nil, err
 		}
@@ -585,10 +688,7 @@ func (o *Overlay) evict(d *dirtyFile) error {
 	d.dead = true
 	d.c().Broadcast() // a WRITE waiting at the gate looks the inode up again
 	o.recount(d)
-	err := d.wal.Close()
-	if rerr := o.fs.Remove(d.wal.path); rerr != nil && err == nil {
-		err = rerr
-	}
+	err := d.wal.RemoveAll()
 	o.mu.Lock()
 	if o.files[d.ino] == d {
 		delete(o.files, d.ino)
@@ -644,8 +744,8 @@ func (o *Overlay) WriteAs(ino meta.Ino, baseSize, off uint64, p []byte, actor me
 }
 
 func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte, actor meta.UserIdx) error {
-	if o.TotalDirty() >= o.maxDirty {
-		return ErrDirtyFull // L-23: nothing is accepted until flushes drain the overlay
+	if o.TotalDirty() >= o.maxDirty || o.stagingLow() {
+		return ErrDirtyFull // L-23: nothing is accepted until flushes drain the overlay (I-396)
 	}
 	d, err := o.get(ino, baseSize, true)
 	if err != nil {
@@ -655,12 +755,22 @@ func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte, actor m
 		d.mu.Unlock()
 		return o.tryWrite(ino, baseSize, off, p, actor) // evicted while waiting: a fresh entry
 	}
-	if d.wal.Size() >= o.walCap {
-		// The flusher flushes this inode in full at the cap (L-186); until that drains
-		// the WAL nothing more is accepted. One record may cross the line, so the cap is
-		// a trigger the run loop can observe, not a size the WAL can never reach.
+	if d.wal.Bytes() >= o.walCap {
+		// The flusher flushes this inode at the cap (L-186); until that drains the log
+		// nothing more is accepted. One record may cross the line, so the cap is a
+		// trigger the run loop can observe, not a size the log can never reach.
 		d.mu.Unlock()
 		return ErrWALFull
+	}
+	if d.wal.HeadBytes() >= o.segMax {
+		if err := o.rotate(d); err != nil {
+			d.mu.Unlock()
+			return err
+		}
+		if d.dead { // evicted while the rotation waited for the inode's appends
+			d.mu.Unlock()
+			return o.tryWrite(ino, baseSize, off, p, actor)
+		}
 	}
 	if err := d.noteActor(actor); err != nil {
 		d.mu.Unlock()
@@ -688,6 +798,22 @@ func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte, actor m
 	d.settle()
 	d.mu.Unlock()
 	return err
+}
+
+// rotate starts a new head segment for d with the inode's state as its first records
+// (docs/04 §2.1). It waits for d's appends between write and fsync, so every record of
+// the old head is fsynced and the state equals what a replay of the log builds. Called
+// with d.mu held.
+func (o *Overlay) rotate(d *dirtyFile) error {
+	defer d.quiesce()()
+	if d.dead || d.wal.HeadBytes() < o.segMax { // evicted, or another WRITE rotated it
+		return nil
+	}
+	first := [][]byte{encodeRecord(recState, d.size, encodeState(d.minSize, d.sizeSet))}
+	if d.actor != 0 {
+		first = append(first, encodeRecord(recActor, uint64(d.actor), nil))
+	}
+	return d.wal.Rotate(first...)
 }
 
 // Truncate sets the overlay size and records the truncation point (review #2).
@@ -944,7 +1070,7 @@ func (o *Overlay) Dirty() []DirtyInfo {
 	for _, d := range entries {
 		d.mu.Lock()
 		if !d.dead && d.dirty() {
-			info := DirtyInfo{Ino: d.ino, DirtyBytes: d.ext.bytes(), WALBytes: d.wal.Size(), Size: d.size, LastWrite: d.lastWrite, Flushing: d.plan != nil}
+			info := DirtyInfo{Ino: d.ino, DirtyBytes: d.ext.bytes(), WALBytes: d.wal.Bytes(), Size: d.size, LastWrite: d.lastWrite, Flushing: d.plan != nil}
 			if d.plan != nil {
 				info.PlanBytes = d.plan.Extents.bytes()
 			}
@@ -978,7 +1104,7 @@ func (o *Overlay) SnapshotForFlush(ino meta.Ino) (*FlushPlan, bool) {
 	if d.plan != nil || (len(d.ext) == 0 && !d.sizeSet) {
 		return nil, false
 	}
-	p := &FlushPlan{Ino: ino, Size: d.size, MinSize: d.minSize, SizeSet: d.sizeSet, Extents: d.ext.clone(), Actor: d.actor}
+	p := &FlushPlan{Ino: ino, Size: d.size, MinSize: d.minSize, SizeSet: d.sizeSet, Extents: d.ext.clone(), Actor: d.actor, walPos: d.wal.Size()}
 	d.plan = p
 	d.ext = nil
 	d.planMin = d.size
@@ -1078,9 +1204,23 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 		// size instead of pinning this one (L-178)
 		return o.evict(d)
 	}
-	// Compact: base, the truncation point, the raised size if a truncate-up happened
-	// while the plan was outstanding (L-180), then the live extents' data (last, so the
-	// record offsets below line up).
+	live := d.ext.bytes()
+	if dead := d.wal.Bytes() - int64(live); dead >= int64(live)+o.compactMin && int64(live) <= o.compactMax { //nolint:gosec // bytes of one log
+		return o.compact(d, committedSize)
+	}
+	// the Commit is recorded, not copied: a clean record names what it made durable and
+	// the segments nothing live points into go (docs/04 §2.1, I-397)
+	if err := d.appendClean(plan); err != nil {
+		return err
+	}
+	return d.wal.DropBefore(d.lowestLive())
+}
+
+// compact rewrites d's log to its live records: base, the truncation point, the raised
+// size if a truncate-up happened while the plan was outstanding (L-180), then the live
+// extents' data (last, so the record offsets below line up). Called with d.mu held and
+// d's appends quiesced.
+func (o *Overlay) compact(d *dirtyFile, committedSize uint64) error {
 	recs := []walRec{{typ: recBase, off: committedSize}}
 	if d.actor != 0 {
 		recs = append(recs, walRec{typ: recActor, off: uint64(d.actor)})
@@ -1102,4 +1242,28 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 		}
 	}
 	return err
+}
+
+// appendClean logs what plan's Commit made durable and the inode's state after it, and
+// fsyncs it. Called with d.mu held and d's appends quiesced.
+func (d *dirtyFile) appendClean(plan *FlushPlan) error {
+	ranges := []fileRange{{0, math.MaxUint64}}
+	if len(plan.Residual) > 0 {
+		ranges = plan.Extents.minus(plan.Residual)
+	}
+	_, end, err := d.wal.write(recClean, uint64(plan.walPos), encodeClean(d.size, d.minSize, d.sizeSet, ranges)) //nolint:gosec // a log position
+	if err != nil {
+		return err
+	}
+	return d.wal.syncTo(end)
+}
+
+// lowestLive is the log position of d's oldest live extent, or the end of the log when
+// none is left.
+func (d *dirtyFile) lowestLive() int64 {
+	low := d.wal.Size()
+	for _, x := range d.ext {
+		low = min(low, x.walOff)
+	}
+	return low
 }

@@ -174,6 +174,9 @@ func printStatus(w io.Writer, r admin.Report) {
 			fmt.Fprintln(w, l)
 		}
 	}
+	if l := admin.StagedLine(r.Gateway); l != "" {
+		fmt.Fprintf(w, "staged  %s\n", l) // not yet spread to the cluster (docs/04 §3, I-398)
+	}
 	if r.WebURL != "" {
 		fmt.Fprintf(w, "web     %s\n", r.WebURL)
 	}

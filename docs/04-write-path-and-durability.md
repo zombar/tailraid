@@ -718,10 +718,10 @@ the WAL cap.
 | I-166 | `TestReader_Readahead_SequentialFillsCache`, `TestReader_Readahead_RandomReadDoesNotPrefetch`, `TestReader_Readahead_BoundedInFlight`, `TestReader_Readahead_ForegroundJoinsPrefetch`, `TestReader_Readahead_SkipsHashZeroAndCached`, `TestReader_Readahead_FailureIsInvisible`, `TestPhaseHotPath_ConformingGatewayPasses`, `TestPhaseHotPath_NonConformingGatewayFails`, `TestPhaseHotPath_OneGatewayUnmovedCountersSkip`, `TestReader_Readahead_SameChunkReadRetriesSkippedCandidates` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenClusterFull`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |
 | I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty`, `TestOverlay_TotalDirty_CountsPlanBytes`, `TestOverlay_TotalDirty_FollowsAbortAndDrop`, `TestWAL_Compact_StreamsThroughBoundedBuffer`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid` |
-| I-396 | `TestStub_I_396` |
-| I-397 | `TestStub_I_397` |
-| I-398 | `TestStub_I_398` |
-| I-399 | `TestStub_I_399` |
+| I-396 | `TestOverlay_Stage_Derived`, `TestOverlay_Stage_CountsOwnLogs`, `TestOverlay_Stage_Boundaries`, `TestOverlay_StageReserve_Waits`, `TestConfig_StagingSize` |
+| I-397 | `TestWAL_Clean_ReplaysToOverlay`, `TestWAL_Sequential_DropsSegments`, `TestWAL_Rotate_CrashPoints`, `TestWAL_Compact_OnlySmallLive`, `TestOverlay_LargeStage_NoCopy`, `TestOverlay_ReplayModel` |
+| I-398 | `TestGatewayReport_Staged`, `TestFlusher_DrainRate`, `TestCheck_WarnsStaged` |
+| I-399 | `TestExtents_AppendInPlace` |
 | I-83 | `TestFlusher_StragglerPut_CancelledAfterReplace`, `TestClient_PutTimeout_Table`, `TestNode_SlotBudget_Table`, `TestChunkRPC_PutCancelled_NoShardLeft` |
 | I-98 | `TestReader_HedgesStalledHolder` |
 | I-261 | `TestVFS_DirtyFile_ReportsItsWriteTime` |

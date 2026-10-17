@@ -7,9 +7,6 @@ import { ago, bytes, count } from "./fmt.ts";
 import type { HomeStatus, Report } from "./api.ts";
 import type { Sample } from "./status.ts";
 
-// docs/00 durability contract: the gateway's dirty-byte and WAL caps.
-const MAX_DIRTY = 256 * 1024 * 1024;
-const WAL_CAP = 128 * 1024 * 1024;
 
 export function render(root: HTMLElement, r: Report, history: Sample[]): void {
   const v = r.volume;
@@ -36,14 +33,24 @@ export function render(root: HTMLElement, r: Report, history: Sample[]): void {
   const section = h("section", null, h("h2", null, "Integrity"), tiles, spark, repair(r));
   if (r.gateway) {
     const g = r.gateway;
+    const stage = g.stage || 1024 * 1024 * 1024; // docs/04 §3: the gateway's stage (I-396)
     section.append(
       h("h3", null, "Gateway"),
-      barRow("dirty bytes", bar(g.dirty_bytes / MAX_DIRTY, fillTone(g.dirty_bytes / MAX_DIRTY)), `${bytes(g.dirty_bytes)} in ${g.dirty_inodes} ${g.dirty_inodes === 1 ? "file" : "files"} of ${bytes(MAX_DIRTY)}` + (g.flushing ? " · flushing" : "")),
-      barRow("WAL", bar(g.wal_bytes / WAL_CAP, fillTone(g.wal_bytes / WAL_CAP)), `${bytes(g.wal_bytes)} of ${bytes(WAL_CAP)}`),
-      h("div", { class: "small dim" }, "acknowledged writes not yet committed to the cluster"),
+      barRow("staged", bar(g.staged / stage, fillTone(g.staged / stage)), `${bytes(g.staged)} in ${g.dirty_inodes} ${g.dirty_inodes === 1 ? "file" : "files"} of ${bytes(stage)}` + drain(g.staged, g.drain_rate) + (g.flushing && !g.drain_rate ? " · flushing" : "")),
+      barRow("WAL", bar(g.wal_bytes / stage, fillTone(g.wal_bytes / stage)), `${bytes(g.wal_bytes)} of ${bytes(stage)} on disk`),
+      h("div", { class: "small dim" }, "acknowledged writes on this host's disk only, not yet spread to the cluster"),
     );
   }
   root.append(section);
+}
+
+/** drain is the rate the staged bytes leave at and the time they take (docs/04 §3, I-398). */
+function drain(staged: number, rate: number): string {
+  if (!staged || !rate) return "";
+  const secs = staged / rate;
+  const mins = Math.round(secs / 60);
+  const eta = secs < 60 ? `${Math.floor(secs)} s` : mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min`;
+  return ` · draining ${bytes(rate)}/s · about ${eta}`;
 }
 
 function tile(label: string, value: number, sub: string, tone: "warn" | "bad"): HTMLElement {

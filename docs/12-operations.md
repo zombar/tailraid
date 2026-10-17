@@ -345,7 +345,7 @@ a quarter of the free space of the disk holding `node.data_dir` by default, at l
 1 GiB, or `staging.size` (`staging: {size: 200GiB}`, at least 1 GiB) to set it. A large
 copy then finishes at local disk speed and the flusher spreads it afterwards. While bytes
 are staged they are on this host's disk only, so plain `tailraid status` prints
-`staged 41.2 GiB on this host only, draining 38 MB/s, about 18 min`, the dashboard's
+`staged 41.2 GiB on this host only, draining 38.0 MiB/s, about 18 min`, the dashboard's
 Integrity section shows the same row, and `check` warns while more than 1 GiB is staged
 (I-398).
 
