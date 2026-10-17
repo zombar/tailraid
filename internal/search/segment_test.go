@@ -126,17 +126,27 @@ func FuzzSegmentDecode(f *testing.F) {
 }
 
 // A catalogue section written before the name analyser (segment version 1) still reads,
-// without the new fields; version 3 round-trips them and a game's.
-// Invariant: I-276, I-278
+// without the new fields; version 4 round-trips them, a game's and the directors, and a
+// version 3 section reads its directors as unknown.
+// Invariant: I-276, I-278, I-412
 func TestCatalog_SectionVersions(t *testing.T) {
 	e := Entry{
 		Ino: 7, Lib: 2, Kind: EntEpisode, Title: "Some Guest", Season: -1, Genres: []string{"Talk"}, People: []string{"Host"},
 		Date: "2024-03-14", Absolute: 12, Edition: "Extended", Quality: []string{"1080p", "WEB"}, Languages: []string{"ITA"}, Discs: 2,
 		Platform: "Super Nintendo", Regions: []string{"USA"}, Revision: "Rev 2", Flags: []string{"proto"}, Developer: "Rare", Publisher: "Nintendo", Players: "1-2",
 	}
-	got := decodeCatalog(encodeCatalog([]Entry{e, e}), 3)
+	e.Directors = 1
+	got := decodeCatalog(encodeCatalog([]Entry{e, e}), 4)
 	if len(got) != 2 || !reflect.DeepEqual(got[1], e) {
-		t.Fatalf("v3 round trip:\n got %+v\nwant %+v", got, e)
+		t.Fatalf("v4 round trip:\n got %+v\nwant %+v", got, e)
+	}
+	// version 3: the same layout without the directors, which read as unknown
+	v4 := encodeCatalog([]Entry{e})
+	got = decodeCatalog(v4[:len(v4)-1], 3)
+	e3 := e
+	e3.Directors = -1
+	if len(got) != 1 || !reflect.DeepEqual(got[0], e3) {
+		t.Fatalf("v3 section:\n got %+v\nwant %+v", got, e3)
 	}
 	// version 1: the same layout up to the lists, nothing after them
 	var w buf

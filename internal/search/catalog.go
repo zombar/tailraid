@@ -43,7 +43,8 @@ type Entry struct {
 	Rating    string // one decimal, as the sidecar gave it
 	Runtime   int    // minutes
 	MPAA      string
-	People    []string // the director first, then up to six actors
+	People    []string // the directors first, then up to six actors
+	Directors int      // how many of People are directors; -1 unknown (segment version 3 or older)
 	Season    int      // -1: unknown
 	Episode   int
 	EpisodeTo int // a double episode's last number, else Episode
@@ -217,7 +218,8 @@ type NFO struct {
 	Rating    string
 	Runtime   int
 	MPAA      string
-	People    []string
+	People    []string // the directors first
+	Directors int      // how many of People are directors
 	Season    int
 	Episode   int
 	Aired     string
@@ -289,6 +291,7 @@ func DecodeNFO(b []byte) (NFO, bool) {
 	for _, d := range x.Director {
 		if d := clean(d); d != "" {
 			n.People = append(n.People, d)
+			n.Directors++
 		}
 	}
 	actors := 0
@@ -462,7 +465,7 @@ func applyNFO(e *Entry, n NFO) {
 	}
 	e.MPAA = firstOf(n.MPAA, e.MPAA)
 	if len(n.People) > 0 {
-		e.People = n.People
+		e.People, e.Directors = n.People, n.Directors
 	}
 	e.Aired = firstOf(n.Aired, e.Aired)
 }
@@ -819,6 +822,7 @@ func encodeCatalog(es []Entry) []byte {
 				w.str(s)
 			}
 		}
+		w.int(e.Directors)
 	}
 	return w.b
 }
@@ -866,6 +870,10 @@ func decodeCatalog(b []byte, v uint8) []Entry {
 			}
 			readList(c, &e.Regions)
 			readList(c, &e.Flags)
+		}
+		e.Directors = -1
+		if v >= 4 {
+			e.Directors = c.int()
 		}
 		out = append(out, e)
 	}

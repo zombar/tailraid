@@ -21,7 +21,7 @@ type Hit struct {
 	Size   uint64    `json:"size"`
 	Mtime  time.Time `json:"mtime"`
 	Ino    meta.Ino  `json:"ino"`
-	Match  string    `json:"match"` // name | tags | content
+	Match  string    `json:"match"` // name | tags | content | field
 	Title  string    `json:"title,omitempty"`
 	Artist string    `json:"artist,omitempty"`
 	Album  string    `json:"album,omitempty"`
@@ -40,6 +40,8 @@ type Result struct {
 	Query string `json:"query"`
 	Hits  []Hit  `json:"hits"`
 	Index string `json:"index,omitempty"` // "unavailable" when only the names answered
+	// Err is a malformed query (docs/18 §6a): the web route answers 400 with its offset.
+	Err *QueryError `json:"-"`
 }
 
 // nameList is the folded name words of every inode (docs/18 §6): one byte slice, each
@@ -163,11 +165,33 @@ func (nl *nameList) matches(e nameEnt, words []string) bool {
 	return true
 }
 
-// search answers q over the names and the chain (docs/18 §6).
-func (x *Index) search(src Source, names *nameList, q, under string, limit int) Result {
+// search answers q over the names and the chain (docs/18 §6); its field terms, matched
+// through ft, keep the files of the items they match (§6a, I-412). ft is nil when the
+// query has no field terms or no chain loaded, and a field term then matches nothing.
+func (x *Index) search(src Source, names *nameList, q string, pq Query, ft *fieldTable, under string, limit int) Result {
 	res := Result{Query: q, Hits: []Hit{}}
-	words := Terms(q)
+	var words []string
+	var fields []Term
+	for _, t := range pq.Terms {
+		if t.Field == FieldWord {
+			words = append(words, strings.Fields(t.Value)...)
+		} else {
+			fields = append(fields, t)
+		}
+	}
+	var keep map[meta.Ino]bool // the files of the items the field terms match
+	if len(fields) > 0 {
+		keep = map[meta.Ino]bool{}
+		if ft != nil {
+			for _, f := range ft.files(src, sortedKeys(ft.match(fields))) {
+				keep[f] = true
+			}
+		}
+	}
 	if len(words) == 0 {
+		if keep != nil {
+			res.Hits = fieldHits(src, keep, under, limit)
+		}
 		return res
 	}
 	if limit <= 0 {
@@ -185,7 +209,7 @@ func (x *Index) search(src Source, names *nameList, q, under string, limit int) 
 	seen := map[meta.Ino]bool{}
 	var nameHits, tagHits, contentHits []Hit
 	for _, e := range names.ents {
-		if e.ino == 0 || !names.matches(e, words) {
+		if e.ino == 0 || !names.matches(e, words) || (keep != nil && !keep[e.ino]) {
 			continue
 		}
 		h, ok := hitOf(src, e.ino, underParts)
@@ -203,7 +227,7 @@ func (x *Index) search(src Source, names *nameList, q, under string, limit int) 
 	if x != nil {
 		for key, sc := range x.candidates(words) {
 			d := x.Segs[key.seg].Doc(key.doc)
-			if s, di, ok := x.FindDoc(d.Ino); !ok || s != key.seg || di != key.doc || seen[d.Ino] { // superseded, or named already
+			if s, di, ok := x.FindDoc(d.Ino); !ok || s != key.seg || di != key.doc || seen[d.Ino] || (keep != nil && !keep[d.Ino]) { // superseded, named already, or not a field term's
 				continue
 			}
 			h, ok := hitOf(src, d.Ino, underParts)
@@ -280,6 +304,39 @@ func (x *Index) candidates(words []string) map[docKey]*docScore {
 		cur = next
 	}
 	return cur
+}
+
+// fieldHits lists the files of a query of field terms only, by path (docs/18 §6a).
+func fieldHits(src Source, files map[meta.Ino]bool, under string, limit int) []Hit {
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+	limit = min(limit, MaxLimit)
+	var underParts []string
+	if p := meta.SplitPath(under); len(p) > 0 {
+		in, err := src.Resolve(p)
+		if err != nil || in.Type != meta.TDir {
+			return []Hit{}
+		}
+		underParts = p
+	}
+	hits := []Hit{}
+	for ino := range files {
+		if h, ok := hitOf(src, ino, underParts); ok {
+			h.Match, h.Terms = "field", []TermHit{}
+			hits = append(hits, h)
+		}
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].Path != hits[j].Path {
+			return hits[i].Path < hits[j].Path
+		}
+		return hits[i].Ino < hits[j].Ino
+	})
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	return hits
 }
 
 // hitOf names a live inode outside /.tailraid and the trash, within under.

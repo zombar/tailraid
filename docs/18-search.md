@@ -140,7 +140,7 @@ limits hits to a live folder's subtree (its own path included); `limit` is 50 by
 200 at most, and 0 or more than 200 is 400 (`{0, 1, max−1, max, max+1}`).
 
 A hit is `{path, type, size, mtime, ino, match, title?, artist?, album?, terms:
-[{term, off}]}` with `match` one of `name`, `tags`, `content`:
+[{term, off}]}` with `match` one of `name`, `tags`, `content` (and `field`, §6a):
 
 - **Names** are matched live against the FSM, so a file written a second ago is found by
   its name at once. The node keeps a folded name list (every inode's words) that a query
@@ -178,7 +178,10 @@ fields of the page (13 §3 and §10d), the CLI's `tailraid search` and every sco
 `<v>` is one word or a `"quoted phrase"`; it is folded as the index folds (§3). An
 unquoted value matches a field value that has the word among its words; a quoted one
 matches a value whose folded form equals it (`actor:"tom hanks"` is Tom Hanks and never
-Tom Hanks Jr.). Terms are ANDed; a field named twice is two conditions. A query is at most
+Tom Hanks Jr.). A bare token that folds to no word (a single letter while the viewer types)
+is skipped. Terms are ANDed over **items**: each term's matching entries are lifted to their
+item first (a season or an episode to its show), so an actor named in an episode's sidecar
+and a genre in its show's meet in the show; a field named twice is two conditions. A query is at most
 `QueryMax` (1 KiB) and `TermsMax` (16) terms; an unknown field, an unclosed quote, an empty
 value, a malformed year or more terms than that is a 400 that names the offset of the
 fault (`{"error","at"}`), never a partial answer.
@@ -197,7 +200,7 @@ The **scope** chooses what a hit is, never which items match:
   before, and a query with field terms matches the files of the items its field terms
   match (a film's or an episode's video, an album's tracks, a game's files) that the
   query's words also match by name, tags or content; a query of field terms only lists
-  those files, ordered by path.
+  those files as `match: "field"` hits, ordered by path.
 A test runs every query of a table through both scopes and checks the media hits'
 items are exactly the items of the files hits (I-412).
 
@@ -600,9 +603,9 @@ the Cover Art Archive data are CC0 and need none.
 | I-387 | `TestPass_FromFeed_MatchesFullWalk`, `TestPass_NothingChanged_WalksNothing`, `TestPass_CatalogueRebuildsTouchedLibraryOnly`, `TestPass_LateTrackRebuildsItsAlbum` |
 | I-388 | `TestSearch_Names_FromFeed_MatchesRebuild`, `TestSearch_Names_UpdateCostIsTheChanges` |
 | I-384 | `TestStore_Libraries_CostIndependentOfInodes`, `TestStore_Libraries`, `TestFSM_ApplySnapshotRestoreEquivalence` |
-| I-411 | stub until `media-search-index`: the grammar table, the bounds table, a fuzz target |
-| I-412 | stub until `media-search-index`: the field match table, the field table equal to a rebuild, both scopes matching the same items, segment 4's directors, N-node determinism, the web route's media scope |
-| I-413 | stub until `media-search-index`: the suggestion table, the limit boundaries, the web route |
+| I-411 | `TestParseQuery_Table`, `TestParseQuery_Bounds_Table`, `FuzzParseQuery`, `TestWebUI_Search_MediaScope` |
+| I-412 | `TestFields_Match_Table`, `TestFields_TableFromCatalogue_EqualsRebuild`, `TestSearch_ScopesMatchSameItems`, `TestCatalog_SectionVersions`, `TestCluster_SearchDeterministicAcrossNodes`, `TestWebUI_Search_MediaScope` |
+| I-413 | `TestSuggest_Table`, `TestSuggest_LimitBoundaries`, `TestCluster_SearchDeterministicAcrossNodes`, `TestWebUI_Search_Suggest` |
 | I-210 | `TestFSM_SetAttr_LibraryKind_Table`, `TestFSM_LibraryEffective_NearestAncestor`, `TestStore_Libraries`, `TestEncodeCommand_V6Gating`, `TestEncodeCommand_Golden`, `TestCluster_Codec6RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table` |
 | I-276 | `TestNames_Table`, `FuzzAnalyze`, `TestNames_Corpus`, `TestNames_FolderRoles`, `TestCatalog_MusicRoles_Table`, `TestCatalog_ExtrasNotItems`, `TestCatalog_SectionVersions` |
 | I-277 | `TestFSM_SetAttr_LibraryRoms_Table`, `TestEncodeCommand_V10Gating`, `TestCluster_Codec10RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table`, `TestFS_SetFlags_RomsWaitsForCodec10` |

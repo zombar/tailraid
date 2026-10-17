@@ -94,6 +94,9 @@ type Service struct {
 	games    map[meta.Ino]gamesMemo
 	status   Status
 	inFlight bool
+	// the field table of the newest segment's catalogue (docs/18 §6a), and that segment
+	ft    *fieldTable
+	ftSeg *Reader
 }
 
 type gamesMemo struct {
@@ -169,19 +172,86 @@ func (s *Service) Catalog(ctx context.Context) ([]Entry, error) {
 	return x.Segs[0].Catalog(), nil
 }
 
-// Search answers a query (docs/18 §6, I-208).
+// Search answers a query in scope files (docs/18 §6, §6a, I-208, I-412); a malformed one
+// is answered with Err set and no hits.
 func (s *Service) Search(ctx context.Context, q, under string, limit int) Result {
+	pq, perr := ParseQuery(q)
+	if perr != nil {
+		var qe *QueryError
+		if !errors.As(perr, &qe) {
+			qe = &QueryError{Msg: perr.Error()}
+		}
+		return Result{Query: q, Hits: []Hit{}, Err: qe}
+	}
 	x, err := s.index(ctx)
 	s.mu.Lock()
 	s.names = freshNames(s.Src, s.names)
 	names := s.names
 	s.mu.Unlock()
 	if err != nil {
-		res := (*Index)(nil).search(s.Src, names, q, under, limit)
+		res := (*Index)(nil).search(s.Src, names, q, pq, nil, under, limit)
 		res.Index = "unavailable"
 		return res
 	}
-	return x.search(s.Src, names, q, under, limit)
+	return x.search(s.Src, names, q, pq, s.fields(x), under, limit)
+}
+
+// fields is the field table of x's newest catalogue, built once per segment.
+func (s *Service) fields(x *Index) *fieldTable {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var seg *Reader
+	if len(x.Segs) > 0 {
+		seg = x.Segs[0]
+	}
+	if s.ft == nil || s.ftSeg != seg {
+		var es []Entry
+		if seg != nil {
+			es = seg.Catalog()
+		}
+		s.ft, s.ftSeg = buildFields(es), seg
+	}
+	return s.ft
+}
+
+// Media answers a query in scope media: the catalogue items it matches, at most limit
+// (docs/18 §6a, I-412). An empty query matches nothing; a malformed one is a *QueryError.
+func (s *Service) Media(ctx context.Context, q string, limit int) ([]Entry, error) {
+	pq, err := ParseQuery(q)
+	if err != nil {
+		return nil, err
+	}
+	if len(pq.Terms) == 0 {
+		return []Entry{}, nil
+	}
+	x, err := s.index(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items := s.fields(x).Items(pq)
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+	if len(items) > min(limit, MaxLimit) {
+		items = items[:min(limit, MaxLimit)]
+	}
+	return items, nil
+}
+
+// Suggest answers the field values for the query's last word (docs/18 §6a, I-413).
+func (s *Service) Suggest(ctx context.Context, q string, limit int, allow func(*Entry) bool) ([]SuggestGroup, error) {
+	pq, err := ParseQuery(q)
+	if err != nil {
+		return nil, err
+	}
+	x, err := s.index(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = DefaultSuggest
+	}
+	return s.fields(x).Suggest(pq, min(limit, MaxSuggest), allow), nil
 }
 
 // candidate is a file the pass will read.

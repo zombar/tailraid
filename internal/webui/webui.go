@@ -151,6 +151,7 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("GET /api/tags", s.tags)
 	mux.HandleFunc("GET /api/pins", s.pinList)
 	mux.HandleFunc("GET /api/search", s.search)
+	mux.HandleFunc("GET /api/search/suggest", s.suggest)
 	mux.HandleFunc("GET /api/render", s.render)
 	mux.HandleFunc("GET /api/media", s.media)
 	mux.HandleFunc("GET /files/{path...}", s.get) // a GET pattern serves HEAD too
