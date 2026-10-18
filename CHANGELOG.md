@@ -2,6 +2,22 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.11.0 (2026-10-18)
+
+### Changes
+
+- nfs: a CREATE makes the file with the mode it asks for (I-416) ([5725501](https://github.com/zombar/tailraid/commit/5725501))
+- rpc: a host registers its own disks' budgets unsigned (I-415) ([9b50cb3](https://github.com/zombar/tailraid/commit/9b50cb3))
+- soak: phase 35, watching and the media search (I-405, I-407..I-413) ([2807606](https://github.com/zombar/tailraid/commit/2807606))
+- webui, vfs: the media viewer, the album viewer, Continue watching (I-407..I-410, I-414) ([255993c](https://github.com/zombar/tailraid/commit/255993c))
+- search, webui: field terms, one grammar for both scopes, suggestions (I-411..I-413) ([62223ff](https://github.com/zombar/tailraid/commit/62223ff))
+- meta: playback rows, op 34 at codec 17, snapshot frame 16 (I-405, I-406) ([8fd56f6](https://github.com/zombar/tailraid/commit/8fd56f6))
+- lookdev: the media viewer, the album viewer, continue watching, media search ([b05c5fc](https://github.com/zombar/tailraid/commit/b05c5fc))
+
+### Documentation
+
+- docs: watching and the media search (I-405..I-414) ([9f8f5b6](https://github.com/zombar/tailraid/commit/9f8f5b6))
+
 ## v0.10.6 (2026-10-17)
 
 ### Changes
