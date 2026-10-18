@@ -92,7 +92,7 @@ https://www.themoviedb.org/movie/329865`
 	n, ok := DecodeNFO([]byte(movie))
 	want := NFO{
 		Root: "movie", Title: "Arrival", Year: 2016, Plot: "Linguist meets heptapods.", Runtime: 116, Genres: []string{"Drama", "Sci-Fi", "Mystery"},
-		Rating: "7.9", MPAA: "PG-13", People: []string{"Denis Villeneuve", "Amy Adams", "Jeremy Renner"}, Season: -1, Episode: -1,
+		Rating: "7.9", MPAA: "PG-13", People: []string{"Denis Villeneuve", "Amy Adams", "Jeremy Renner"}, Directors: 1, Season: -1, Episode: -1,
 	}
 	if !ok || !reflect.DeepEqual(n, want) {
 		t.Fatalf("movie\n got %+v\nwant %+v", n, want)

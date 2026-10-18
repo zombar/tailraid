@@ -466,7 +466,7 @@ export async function putThumb(path: string, version: number, jpeg: Blob): Promi
 export interface MediaItem {
   ino: number;
   path: string;
-  kind: "movie" | "show" | "season" | "episode" | "album" | "platform" | "game";
+  kind: "movie" | "show" | "season" | "episode" | "album" | "platform" | "game" | "track";
   title: string;
   sort_title: string;
   year?: number;
@@ -515,7 +515,73 @@ export interface MediaItem {
   variants?: number;
   games?: MediaItem[];
   files?: MediaFile[];
+  /** how many of people are directors (docs/18 §8) */
+  directors?: number;
+  /** the viewer's state (docs/13 §10c) */
+  progress?: Progress;
+  watched?: boolean;
+  next?: string;
+  plays?: number;
+  next_up?: boolean;
+  show?: string;
+  album?: string;
+  track_play?: { name: string; plays: number; progress?: Progress }[];
 }
+
+/** Progress is a viewer's row of a file (docs/13 §10c): times in milliseconds. */
+export interface Progress {
+  pos: number;
+  dur: number;
+  watched: boolean;
+  plays: number;
+  hidden?: boolean;
+  at: string;
+  on?: string;
+}
+
+/** playback reads the viewer's row of a file; null when there is none. */
+export async function playback(path: string): Promise<Progress | null> {
+  try {
+    return await call<Progress>("/api/playback?path=" + encodeURIComponent(path));
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+export interface PlayReport {
+  path?: string;
+  paths?: string[];
+  pos?: number;
+  dur?: number;
+  final?: boolean;
+  played?: boolean;
+  action?: "watched" | "unwatched" | "hide";
+}
+
+/** report sends a playback report (docs/13 §10c); keepalive lets one leave with the page. */
+export async function report(r: PlayReport, keepalive = false): Promise<void> {
+  const res = await fetch("/api/playback", { method: "POST", keepalive, headers: { [HEADER]: "1", "Content-Type": "application/json" }, body: JSON.stringify(r) });
+  if (!res.ok) throw await apiError(res);
+}
+
+export const continueRow = (): Promise<{ items: MediaItem[] }> => call("/api/media?continue=1");
+
+/** MediaHits is one library's items in a media search (docs/13 §10d). */
+export interface MediaHits {
+  path: string;
+  kind: string;
+  items: MediaItem[];
+}
+
+export const mediaSearch = (q: string): Promise<{ query: string; libs: MediaHits[] }> => call("/api/search?scope=media&limit=200&q=" + encodeURIComponent(q));
+
+export interface Suggestion {
+  value: string;
+  counts: Record<string, number>;
+}
+
+export const suggest = (q: string): Promise<{ groups: { field: string; values: Suggestion[] }[] }> => call("/api/search/suggest?scope=media&q=" + encodeURIComponent(q));
 
 export interface MediaLibrary {
   path: string;

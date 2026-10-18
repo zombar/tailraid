@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid media viewer</title>
+<link rel="stylesheet" href="../../../internal/webui/src/app.css">
+<style>
+  .variant { font: 12px var(--mono); color: var(--dim); padding-top: 24px; border-top: 1px dashed var(--line); }
+  iframe.phone { border: 1px dashed var(--line); border-radius: 12px; display: block; }
+  /* a stage is the window a modal fills: its transform makes it the containing block of the
+     viewer's fixed layers, so each variant shows the real rules in a box of its own */
+  .stage { position: relative; transform: translateZ(0); height: 720px; overflow: hidden; border: 1px dashed var(--line); border-radius: 12px; }
+  .stage.short { height: 560px; }
+  .stage.fsd { height: auto; aspect-ratio: 16 / 9; }
+  /* 72vh would be the whole lookdev page's height: a stage stands in for a 900 px window */
+  .stage .mscreen:not(.fs) { max-height: 480px; }
+  /* the browser's own video controls, drawn only to show where they sit */
+  .native { position: absolute; left: 0; right: 0; bottom: 0; height: 48px; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: linear-gradient(transparent, var(--overlay)); color: var(--on-status); font: 12px var(--mono); }
+  .native .bar { flex: 1; height: 4px; border-radius: 2px; background: var(--overlay); }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+  <nav class="tabs"><a href="#/">Dashboard</a><a href="#/browse/">Files</a><a class="active" href="#/media">Media</a><a href="#/stats">Stats</a></nav>
+  <form class="search" role="search"><input type="search" value="" aria-label="search the volume"><button type="submit" aria-label="search"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"/></svg></button></form>
+  <span class="pill ok">healthy</span>
+  <span class="who">pike · leader atlas · 3/3 voters live</span>
+</header>
+<div id="warnings"></div>
+<main>
+
+  <section>
+    <div class="variant">variant: Play goes fullscreen at once (the click is the gesture requestFullscreen needs): the screen element, not the bare video, so the title and the back arrow stay over the picture; they fade with the browser's own controls (drawn dashed here) after 3 s without a pointer; the back arrow, Esc or the browser's own exit leave fullscreen and land in the viewer below, still playing</div>
+    <div class="stage fsd">
+      <div class="mscreen fs">
+        <img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a5f'/%3E%3Cellipse cx='8' cy='4' rx='5' ry='2.2' fill='%2394a3b8'/%3E%3Crect y='7' width='16' height='2' fill='%230f172a'/%3E%3C/svg%3E">
+        <div class="fs-top"><button type="button" class="icon-btn" aria-label="leave fullscreen" title="leave fullscreen"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m313-440 224 224-57 56-320-320 320-320 57 56-224 224h487v80H313Z"/></svg></button><span class="fs-name">Arrival<span class="small">2016 · 1 h 56</span></span></div>
+        <div class="native"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M320-200v-560l440 280-440 280Z"/></svg><span>0:41:07</span><span class="bar"></span><span>1:56:02</span><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M120-120v-200h80v120h120v80H120Zm520 0v-80h120v-120h80v200H640ZM120-640v-200h200v80H200v120h-80Zm640 0v-120H640v-80h200v200h-80Z"/></svg></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="variant">variant: an episode in fullscreen, the last 30 s (or from the credits mark when the sidecar has one): the up-next card counts down 10 s and plays the next episode in fullscreen; Cancel keeps the credits; the next episode's frame from the catalogue</div>
+    <div class="stage fsd">
+      <div class="mscreen fs">
+        <img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a8a'/%3E%3Crect x='6' y='2' width='4' height='5' fill='%2394a3b8'/%3E%3C/svg%3E">
+        <div class="fs-top"><button type="button" class="icon-btn" aria-label="leave fullscreen" title="leave fullscreen"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m313-440 224 224-57 56-320-320 320-320 57 56-224 224h487v80H313Z"/></svg></button><span class="fs-name">The Expanse<span class="small">S01E02 · The Big Empty</span></span></div>
+        <div class="upnext"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%230c4a6e'/%3E%3Cellipse cx='8' cy='5' rx='5' ry='1.4' fill='%2338bdf8'/%3E%3C/svg%3E"><span class="ulabel">Up next in 8 s</span><span class="uname">S01E03 · Remember the Cant</span><span class="uacts"><button type="button" class="primary"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M320-200v-560l440 280-440 280Z"/></svg>Play now</button><button type="button">Cancel</button></span></div>
+        <div class="native"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M320-200v-560l440 280-440 280Z"/></svg><span>0:42:21</span><span class="bar"></span><span>0:42:51</span><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M120-120v-200h80v120h120v80H120Zm520 0v-80h120v-120h80v200H640ZM120-640v-200h200v80H200v120h-80Zm640 0v-120H640v-80h200v200h-80Z"/></svg></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="variant">variant: the viewer, a film, after leaving fullscreen: a modal over the Media tab on the black media ground with the fanart blurred behind; back returns to the library at the scroll position it left (Esc too); the screen at 16:9 inside 72 % of the window; the facts folded to one line; nothing else (no seasons, no people grid, no backdrop hero); the fullscreen button goes back in</div>
+    <div class="stage">
+      <div class="mviewer theme-dark">
+        <img class="mbackdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a5f'/%3E%3Cellipse cx='8' cy='4' rx='5' ry='2.2' fill='%2394a3b8'/%3E%3Crect y='7' width='16' height='2' fill='%230f172a'/%3E%3C/svg%3E">
+        <div class="mbar"><a class="back" href="#/media"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m313-440 224 224-57 56-320-320 320-320 57 56-224 224h487v80H313Z"/></svg>Movies</a><span class="mtitle">Arrival · 2016</span><button type="button" class="icon-btn" aria-label="close" title="close"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button></div>
+        <div class="mbody">
+          <div class="mscreen"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a5f'/%3E%3Cellipse cx='8' cy='4' rx='5' ry='2.2' fill='%2394a3b8'/%3E%3Crect y='7' width='16' height='2' fill='%230f172a'/%3E%3C/svg%3E"><button type="button" class="icon-btn fs-btn" aria-label="fullscreen" title="fullscreen"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M120-120v-200h80v120h120v80H120Zm520 0v-80h120v-120h80v200H640ZM120-640v-200h200v80H200v120h-80Zm640 0v-120H640v-80h200v200h-80Z"/></svg></button><div class="native"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M560-200v-560h160v560H560Zm-320 0v-560h160v560H240Z"/></svg><span>0:41:07</span><span class="bar"></span><span>1:56:02</span><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M120-120v-200h80v120h120v80H120Zm520 0v-80h120v-120h80v200H640ZM120-640v-200h200v80H200v120h-80Zm640 0v-120H640v-80h200v200h-80Z"/></svg></div></div>
+          <details class="mfacts">
+          <summary><h1>Arrival</h1><span>2016</span><span>1 h 56</span><span>★ 7.9</span><span>12A</span></summary>
+          <div class="mmore">
+            <p class="plot">A linguist is recruited by the military to communicate with alien lifeforms after twelve mysterious spacecraft land around the world. As nations edge toward war, she races to understand a language in which time itself is written differently.</p>
+            <div class="mlinks"><a class="genre" href="#/media?q=genre%3A%22science%20fiction%22">science fiction</a><a class="genre" href="#/media?q=genre%3Adrama">drama</a></div>
+            <div class="mlinks"><a class="person" href="#/media?q=director%3A%22Denis%20Villeneuve%22">Denis Villeneuve<span class="small dim">director</span></a><a class="person" href="#/media?q=actor%3A%22Amy%20Adams%22">Amy Adams</a><a class="person" href="#/media?q=actor%3A%22Jeremy%20Renner%22">Jeremy Renner</a><a class="person" href="#/media?q=actor%3A%22Forest%20Whitaker%22">Forest Whitaker</a><a class="person" href="#/media?q=actor%3A%22Michael%20Stuhlbarg%22">Michael Stuhlbarg</a></div>
+            <div class="small dim">/films/Arrival (2016)/Arrival.2016.2160p.mkv · 18.4 GiB · <a href="#/browse/films/Arrival%20(2016)">open folder</a></div>
+          </div>
+        </details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="variant">variant: the facts unfolded: plot, genres and people as links into the Media tab's search (§10d), the file and its folder last; the fold remembers its state per device</div>
+    <div class="stage">
+      <div class="mviewer theme-dark">
+        <img class="mbackdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a5f'/%3E%3Cellipse cx='8' cy='4' rx='5' ry='2.2' fill='%2394a3b8'/%3E%3Crect y='7' width='16' height='2' fill='%230f172a'/%3E%3C/svg%3E">
+        <div class="mbar"><a class="back" href="#/media"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m313-440 224 224-57 56-320-320 320-320 57 56-224 224h487v80H313Z"/></svg>Movies</a><span class="mtitle">Arrival · 2016</span><button type="button" class="icon-btn" aria-label="close" title="close"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button></div>
+        <div class="mbody">
+          <div class="mscreen"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a5f'/%3E%3Cellipse cx='8' cy='4' rx='5' ry='2.2' fill='%2394a3b8'/%3E%3Crect y='7' width='16' height='2' fill='%230f172a'/%3E%3C/svg%3E"><button type="button" class="icon-btn fs-btn" aria-label="fullscreen" title="fullscreen"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M120-120v-200h80v120h120v80H120Zm520 0v-80h120v-120h80v200H640ZM120-640v-200h200v80H200v120h-80Zm640 0v-120H640v-80h200v200h-80Z"/></svg></button></div>
+          <details class="mfacts" open>
+          <summary><h1>Arrival</h1><span>2016</span><span>1 h 56</span><span>★ 7.9</span><span>12A</span></summary>
+          <div class="mmore">
+            <p class="plot">A linguist is recruited by the military to communicate with alien lifeforms after twelve mysterious spacecraft land around the world. As nations edge toward war, she races to understand a language in which time itself is written differently.</p>
+            <div class="mlinks"><a class="genre" href="#/media?q=genre%3A%22science%20fiction%22">science fiction</a><a class="genre" href="#/media?q=genre%3Adrama">drama</a></div>
+            <div class="mlinks"><a class="person" href="#/media?q=director%3A%22Denis%20Villeneuve%22">Denis Villeneuve<span class="small dim">director</span></a><a class="person" href="#/media?q=actor%3A%22Amy%20Adams%22">Amy Adams</a><a class="person" href="#/media?q=actor%3A%22Jeremy%20Renner%22">Jeremy Renner</a><a class="person" href="#/media?q=actor%3A%22Forest%20Whitaker%22">Forest Whitaker</a><a class="person" href="#/media?q=actor%3A%22Michael%20Stuhlbarg%22">Michael Stuhlbarg</a></div>
+            <div class="small dim">/films/Arrival (2016)/Arrival.2016.2160p.mkv · 18.4 GiB · <a href="#/browse/films/Arrival%20(2016)">open folder</a></div>
+          </div>
+        </details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="variant">variant: an episode: the summary carries the show and the number; under it previous and next (next episode across a season's end too, Specials never in the run); the season folded as Episodes, its watched ticks and the progress of the one half-watched; back says Shows</div>
+    <div class="stage" style="height: 960px">
+      <div class="mviewer theme-dark">
+        <img class="mbackdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23172554'/%3E%3Ccircle cx='12' cy='3' r='1.2' fill='%23fde68a'/%3E%3Cellipse cx='5' cy='7' rx='4' ry='1.2' fill='%231e3a8a'/%3E%3C/svg%3E">
+        <div class="mbar"><a class="back" href="#/media"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m313-440 224 224-57 56-320-320 320-320 57 56-224 224h487v80H313Z"/></svg>Shows</a><span class="mtitle">The Expanse · S01E02</span><button type="button" class="icon-btn" aria-label="close" title="close"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button></div>
+        <div class="mbody">
+          <div class="mscreen"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a8a'/%3E%3Crect x='6' y='2' width='4' height='5' fill='%2394a3b8'/%3E%3C/svg%3E"><button type="button" class="icon-btn fs-btn" aria-label="fullscreen" title="fullscreen"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M120-120v-200h80v120h120v80H120Zm520 0v-80h120v-120h80v200H640ZM120-640v-200h200v80H200v120h-80Zm640 0v-120H640v-80h200v200h-80Z"/></svg></button></div>
+          <details class="mfacts">
+            <summary><h1>The Big Empty</h1><span>The Expanse</span><span>S01E02</span><span>42:51</span><span>aired 2015-12-14</span></summary>
+          </details>
+          <div class="mnext"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%230c4a6e'/%3E%3Cellipse cx='8' cy='5' rx='5' ry='1.4' fill='%2338bdf8'/%3E%3C/svg%3E"><span class="nname"><span>Next · S01E03</span><span class="small">Remember the Cant · 43:12</span></span><span class="nacts"><button type="button" class="icon-btn" aria-label="previous episode" title="previous episode"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M220-240v-480h80v480h-80Zm520 0L380-480l360-240v480Z"/></svg></button><button type="button" class="primary"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M660-240v-480h80v480h-80Zm-440 0v-480l360 240-360 240Z"/></svg>Next</button></span></div>
+          <details class="mfold" open>
+            <summary>Episodes<span class="small">Season 1 · 1 of 10 watched</span></summary>
+            <table class="episodes">
+              <tbody>
+              <tr class="watched"><td class="no">S01E01</td><td class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23172554'/%3E%3Ccircle cx='4' cy='4' r='1.4' fill='%23fde68a'/%3E%3C/svg%3E"></td><td class="title"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z"/></svg>Dulcinea</td><td class="dur">46:19</td></tr>
+              <tr class="playing"><td class="no">S01E02</td><td class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a8a'/%3E%3Crect x='6' y='2' width='4' height='5' fill='%2394a3b8'/%3E%3C/svg%3E"></td><td class="title">The Big Empty<span class="prog" style="--p: 38%"></span></td><td class="dur">42:51</td></tr>
+              <tr><td class="no">S01E03</td><td class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%230c4a6e'/%3E%3Cellipse cx='8' cy='5' rx='5' ry='1.4' fill='%2338bdf8'/%3E%3C/svg%3E"></td><td class="title">Remember the Cant</td><td class="dur">43:12</td></tr>
+              <tr><td class="no">S01E04</td><td class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e293b'/%3E%3Crect x='2' y='3' width='12' height='3' fill='%23f97316'/%3E%3C/svg%3E"></td><td class="title">CQB</td><td class="dur">44:03</td></tr>
+              </tbody>
+            </table>
+          </details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="variant">variant: opening something partly watched (between 1 min and the watched mark, §10c): the viewer opens on the frame at the saved position, dimmed, with the choice; Resume is the default (Enter); either goes fullscreen; the saved position is this viewer's, from any device</div>
+    <div class="stage short">
+      <div class="mviewer theme-dark">
+        <img class="mbackdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23553c1b'/%3E%3Crect x='3' y='5' width='10' height='3' fill='%23a16207'/%3E%3C/svg%3E">
+        <div class="mbar"><a class="back" href="#/media"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m313-440 224 224-57 56-320-320 320-320 57 56-224 224h487v80H313Z"/></svg>Movies</a><span class="mtitle">Stalker · 1979</span><button type="button" class="icon-btn" aria-label="close" title="close"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button></div>
+        <div class="mbody">
+          <div class="mscreen"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23553c1b'/%3E%3Crect x='3' y='5' width='10' height='3' fill='%23a16207'/%3E%3C/svg%3E">
+            <div class="mprompt"><span class="mq">Resume from 1:02:13?</span><span class="prog" style="--p: 38%"></span><span class="small">1 h 40 left · watched on honker, yesterday</span><span class="acts"><button type="button" class="primary"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M320-200v-560l440 280-440 280Z"/></svg>Resume</button><button type="button"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M480-80q-75 0-140.5-28.5t-114-77q-48.5-48.5-77-114T120-440h80q0 117 81.5 198.5T480-160q117 0 198.5-81.5T760-440q0-117-81.5-198.5T480-720h-6l62 62-56 58-160-160 160-160 56 58-62 62h6q75 0 140.5 28.5t114 77q48.5 48.5 77 114T840-440q0 75-28.5 140.5t-77 114q-48.5 48.5-114 77T480-80Z"/></svg>Start from the beginning</button></span></div>
+          </div>
+          <details class="mfacts"><summary><h1>Stalker</h1><span>1979</span><span>2 h 42</span><span>★ 8.1</span></summary></details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="variant">variant: the end of an episode with no next one, or after Cancel: marked watched (the tick), and the ways on; a film ends the same way with Play again and Back to Movies</div>
+    <div class="stage short">
+      <div class="mviewer theme-dark">
+        <img class="mbackdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23e2e8f0'/%3E%3Crect x='6' y='2' width='4' height='6' fill='%2364748b'/%3E%3C/svg%3E">
+        <div class="mbar"><a class="back" href="#/media"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m313-440 224 224-57 56-320-320 320-320 57 56-224 224h487v80H313Z"/></svg>Shows</a><span class="mtitle">Severance · S02E10</span><button type="button" class="icon-btn" aria-label="close" title="close"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button></div>
+        <div class="mbody">
+          <div class="mscreen"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23e2e8f0'/%3E%3Crect x='6' y='2' width='4' height='6' fill='%2364748b'/%3E%3C/svg%3E">
+            <div class="mprompt"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z"/></svg><span class="mq">Watched · Season 2 finished</span><span class="small">Severance has no more episodes in the volume</span><span class="acts"><button type="button"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M480-80q-75 0-140.5-28.5t-114-77q-48.5-48.5-77-114T120-440h80q0 117 81.5 198.5T480-160q117 0 198.5-81.5T760-440q0-117-81.5-198.5T480-720h-6l62 62-56 58-160-160 160-160 56 58-62 62h6q75 0 140.5 28.5t114 77q48.5 48.5 77 114T840-440q0 75-28.5 140.5t-77 114q-48.5 48.5-114 77T480-80Z"/></svg>Play again</button><a class="btn primary" href="#/media/item/shows/Severance">Back to Severance</a></span></div>
+          </div>
+          <details class="mfacts"><summary><h1>Cold Harbor</h1><span>Severance</span><span>S02E10</span><span>1:16:02</span></summary></details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="variant">variant: a file this browser cannot play (canPlayType says no, or the element errors): the message on the screen and a download; the position is not touched</div>
+    <div class="stage short">
+      <div class="mviewer theme-dark">
+        <div class="mbar"><a class="back" href="#/media"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m313-440 224 224-57 56-320-320 320-320 57 56-224 224h487v80H313Z"/></svg>Movies</a><span class="mtitle">Moon · 2009</span><button type="button" class="icon-btn" aria-label="close" title="close"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button></div>
+        <div class="mbody">
+          <div class="mscreen">
+            <div class="mprompt"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M480-280q17 0 28.5-11.5T520-320q0-17-11.5-28.5T480-360q-17 0-28.5 11.5T440-320q0 17 11.5 28.5T480-280Zm-40-160h80v-240h-80v240Zm40 360q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Z"/></svg><span class="mq">This browser cannot play this file</span><span class="small">HEVC in Matroska · try Safari, or open it in a player on this device</span><span class="acts"><a class="btn" href="/files/films/Moon.2009.1080p.BluRay.x264-GROUP.mkv?download=1">Download</a></span></div>
+          </div>
+          <details class="mfacts"><summary><h1>Moon</h1><span>2009</span><span>1 h 37</span></summary></details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="variant">variant: the phone at 360 px: the screen edge to edge, back and close only; on an iPhone Play uses the video's own fullscreen (webkitEnterFullscreen), so the overlays there are the system's</div>
+    <iframe class="phone" src="viewer-phone.html" width="360" height="760" title="phone frame"></iframe>
+  </section>
+</main>
+</body>
+</html>

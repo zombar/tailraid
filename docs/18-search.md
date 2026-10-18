@@ -140,7 +140,7 @@ limits hits to a live folder's subtree (its own path included); `limit` is 50 by
 200 at most, and 0 or more than 200 is 400 (`{0, 1, max−1, max, max+1}`).
 
 A hit is `{path, type, size, mtime, ino, match, title?, artist?, album?, terms:
-[{term, off}]}` with `match` one of `name`, `tags`, `content`:
+[{term, off}]}` with `match` one of `name`, `tags`, `content` (and `field`, §6a):
 
 - **Names** are matched live against the FSM, so a file written a second ago is found by
   its name at once. The node keeps a folded name list (every inode's words) that a query
@@ -157,6 +157,59 @@ A hit is `{path, type, size, mtime, ino, match, title?, artist?, album?, terms:
   whole sort. **Determinism**: two nodes with the same chain and the same FSM return
   byte-identical bodies (the N-node test).
 - A node whose chain fails to load answers the name hits with `"index": "unavailable"`.
+
+## 6a. Fields: one grammar, two scopes (I-411..I-413)
+
+A query is words and **field terms**, parsed once by `search.ParseQuery` for both search
+fields of the page (13 §3 and §10d), the CLI's `tailraid search` and every scope:
+
+| Term | Matches a catalogue item whose |
+|---|---|
+| `actor:<v>` | actors (the people after its directors, §8) |
+| `director:<v>` | directors |
+| `person:<v>` | actors or directors |
+| `genre:<v>` | genres |
+| `title:<v>` | title or sort title |
+| `artist:<v>` | artist (an album's, or a track's album's) |
+| `year:<n>`, `year:<nnnx>`, `year:<a>-<b>` | year is `n`, in the decade, or in `[a, b]` |
+| `kind:<k>` | kind: `movie`, `show`, `episode`, `album`, `game` |
+| a bare word | title, people, genres, artist or plot (the last bare word as a prefix) |
+
+`<v>` is one word or a `"quoted phrase"`; it is folded as the index folds (§3). An
+unquoted value matches a field value that has the word among its words; a quoted one
+matches a value whose folded form equals it (`actor:"tom hanks"` is Tom Hanks and never
+Tom Hanks Jr.). A bare token that folds to no word (a single letter while the viewer types)
+is skipped. Terms are ANDed over **items**: each term's matching entries are lifted to their
+item first (a season or an episode to its show), so an actor named in an episode's sidecar
+and a genre in its show's meet in the show; a field named twice is two conditions. A query is at most
+`QueryMax` (1 KiB) and `TermsMax` (16) terms; an unknown field, an unclosed quote, an empty
+value, a malformed year or more terms than that is a 400 that names the offset of the
+fault (`{"error","at"}`), never a partial answer.
+
+The node keeps a **field table** next to the name list: for each field, its folded values
+with the catalogue items that carry them, built from the catalogue when the chain loads
+or changes (it is never stored, as the name list is not), so a field term costs a map
+lookup and a quoted value no scan. The table is a pure function of the catalogue: two
+nodes with the same chain hold the same table.
+
+The **scope** chooses what a hit is, never which items match:
+- `scope=media` answers the matching catalogue items (films, shows, episodes as their
+  show, albums, games), grouped by library in `Store.Libraries()` order and within each by
+  `sort_title` then path, at most `limit` in all.
+- `scope=files` (the header and the CLI) answers files: name, tag and content hits as
+  before, and a query with field terms matches the files of the items its field terms
+  match (a film's or an episode's video, an album's tracks, a game's files) that the
+  query's words also match by name, tags or content; a query of field terms only lists
+  those files as `match: "field"` hits, ordered by path.
+A test runs every query of a table through both scopes and checks the media hits'
+items are exactly the items of the files hits (I-412).
+
+**Suggestions** (`GET /api/search/suggest`, I-413). For the last word of `q` as a prefix,
+the values of each field whose folded words start with it and that, with the other terms
+of `q`, match at least one item; per value the count of matching items by kind; fields
+in the order actor, director, genre, title, artist; values by total count descending,
+then folded value; at most `limit` (8 by default, 50 at most) per field. The answer is a
+pure function of the table and `q`.
 
 ## 7. Snippets
 
@@ -203,7 +256,10 @@ effective library kind (§9) is set, stored in the segment beside the docs:
   is not an error. A field a sidecar lacks is taken from the name; a field neither has is
   absent.
 - An entry is keyed by the item's inode and carries `kind, title, sort_title, year, plot,
-  genres, rating, runtime, mpaa, people, season, episode, aired, poster, fanart, thumb`,
+  genres, rating, runtime, mpaa, people, season, episode, aired, poster, fanart, thumb`
+  (`people` the directors first and then up to six actors, and from segment version 4
+  `directors`, how many of them are directors, so `actor:` and `director:` can tell them
+  apart; an entry of an older segment counts none and its people match `person:` only),
   art as volume paths relative to the item. The same rules on every node give the same
   catalogue (the determinism test), and a renamed or moved item changes nothing until a
   name-derived field differs.
@@ -303,7 +359,7 @@ Stemming, fuzzy matching, regular expressions, PDF or Office text, EXIF, content
 the CLI's scrape does, §11), providers beyond TMDB, MusicBrainz and the Cover Art Archive
 (TVDB, fanart.tv, IGDB, ScreenScraper), a game's facts and description (a `gamelist.xml`
 is never written), replacing a sidecar that exists,
-a scheduled or automatic scrape, subtitles, watched state, transcoding, a music artist
+a scheduled or automatic scrape, subtitles, transcoding, a music artist
 page beyond the biography and art, launching or emulating a game, reading a ROM's header
 and matching ROMs against DAT files.
 
@@ -469,6 +525,21 @@ the Cover Art Archive data are CC0 and need none.
   and inode, applies `limit` (50 default, 200 max, 400 outside `1..200`) after the sort,
   and two nodes with the same chain and FSM return byte-identical bodies; a node without
   a loadable chain answers the name hits with `index: unavailable`.
+- **I-411** — `ParseQuery` turns a query of at most `QueryMax` bytes and `TermsMax` terms
+  into folded words and field terms by §6a's table, the same for every scope; an unknown
+  field, an unclosed quote, an empty value, a malformed year or a bound exceeded is a 400
+  naming the offset of the fault; it never panics on any input.
+- **I-412** — A field term matches the catalogue items whose field holds the value (any of
+  its words unquoted, the whole folded value quoted; `actor:` past the entry's
+  `directors`, `director:` within them); the field table is a pure function of the
+  catalogue, rebuilt when the chain changes and equal to one built from scratch; `scope`
+  only chooses whether a hit is an item (grouped by library, sorted as the library) or a
+  file of one, so both scopes match the same items, and two nodes with the same chain and
+  FSM return byte-identical bodies.
+- **I-413** — `GET /api/search/suggest` answers, per field in a fixed order, the values
+  whose folded words start with the query's last word and that match at least one item
+  with the rest of the query, each with its count by kind, ordered by count then value,
+  at most `limit` per field (8 by default, 1..50, else 400); the same on every node.
 - **I-210** — `Inode.Flags` bits 2–3 are the library kind (none, movies, tv, music),
   settable on directories only through `SetAttr` with `AttrFlags` at codec 6, refused with
   `ErrCodec` while a live member reads an older codec and with `ErrBadCommand` for any
@@ -532,6 +603,9 @@ the Cover Art Archive data are CC0 and need none.
 | I-387 | `TestPass_FromFeed_MatchesFullWalk`, `TestPass_NothingChanged_WalksNothing`, `TestPass_CatalogueRebuildsTouchedLibraryOnly`, `TestPass_LateTrackRebuildsItsAlbum` |
 | I-388 | `TestSearch_Names_FromFeed_MatchesRebuild`, `TestSearch_Names_UpdateCostIsTheChanges` |
 | I-384 | `TestStore_Libraries_CostIndependentOfInodes`, `TestStore_Libraries`, `TestFSM_ApplySnapshotRestoreEquivalence` |
+| I-411 | `TestParseQuery_Table`, `TestParseQuery_Bounds_Table`, `FuzzParseQuery`, `TestWebUI_Search_MediaScope`, `TestSoak_AllPhasesAgainstHarness` |
+| I-412 | `TestFields_Match_Table`, `TestFields_TableFromCatalogue_EqualsRebuild`, `TestSearch_ScopesMatchSameItems`, `TestCatalog_SectionVersions`, `TestCluster_SearchDeterministicAcrossNodes`, `TestWebUI_Search_MediaScope`, `TestSoak_AllPhasesAgainstHarness`, `TestReport_MediaQueries` |
+| I-413 | `TestSuggest_Table`, `TestSuggest_LimitBoundaries`, `TestCluster_SearchDeterministicAcrossNodes`, `TestWebUI_Search_Suggest`, `TestSoak_AllPhasesAgainstHarness` |
 | I-210 | `TestFSM_SetAttr_LibraryKind_Table`, `TestFSM_LibraryEffective_NearestAncestor`, `TestStore_Libraries`, `TestEncodeCommand_V6Gating`, `TestEncodeCommand_Golden`, `TestCluster_Codec6RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table` |
 | I-276 | `TestNames_Table`, `FuzzAnalyze`, `TestNames_Corpus`, `TestNames_FolderRoles`, `TestCatalog_MusicRoles_Table`, `TestCatalog_ExtrasNotItems`, `TestCatalog_SectionVersions` |
 | I-277 | `TestFSM_SetAttr_LibraryRoms_Table`, `TestEncodeCommand_V10Gating`, `TestCluster_Codec10RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table`, `TestFS_SetFlags_RomsWaitsForCodec10` |

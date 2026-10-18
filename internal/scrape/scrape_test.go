@@ -288,7 +288,7 @@ func TestNFO_RoundTrip_Table(t *testing.T) {
 		}
 		want := search.NFO{
 			Root: m.Root, Title: m.Title, Original: m.Original, Year: m.Year, Plot: m.Plot, Genres: m.Genres, Rating: wantRating,
-			Runtime: m.Runtime, MPAA: m.MPAA, People: people, Season: m.Season, Episode: m.Episode, Aired: m.Aired, Status: m.Status,
+			Runtime: m.Runtime, MPAA: m.MPAA, People: people, Directors: len(m.Directors), Season: m.Season, Episode: m.Episode, Aired: m.Aired, Status: m.Status,
 		}
 		if len(want.People) == 0 {
 			want.People = nil

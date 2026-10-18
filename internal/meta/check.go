@@ -302,7 +302,12 @@ func CheckStats(st *State, kept Stats) []string {
 			return v
 		}
 	}
-	kept.cls, want.cls, kept.due, want.due, kept.lib, want.lib = nil, nil, nil, nil, nil, nil
+	if kept.play != nil {
+		if v := playIndexDrift(want.play, kept.play); v != nil {
+			return v
+		}
+	}
+	kept.cls, want.cls, kept.due, want.due, kept.lib, want.lib, kept.play, want.play = nil, nil, nil, nil, nil, nil, nil, nil
 	if kept != want {
 		return []string{fmt.Sprintf("stats drifted: kept %+v, recount %+v", kept, want)}
 	}

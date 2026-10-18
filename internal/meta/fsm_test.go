@@ -1179,6 +1179,21 @@ func (g *cmdGen) snapshotCmd(name string) Command {
 	return Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: g.now}}
 }
 
+// playbackCmd is a viewer's report or action on a file, or on an inode that is not one
+// (docs/02 §Apply rules, I-405).
+func (g *cmdGen) playbackCmd(files []Inode) Command {
+	ino := Ino(g.rng.Intn(12) + 1)
+	if len(files) > 0 && g.rng.Intn(4) != 0 {
+		ino = files[g.rng.Intn(len(files))].Ino
+	}
+	viewers := []string{"u:1", "u:2", "t:pat@example.com", "x"}
+	dur := uint64(g.rng.Intn(4)) * 1000
+	return Command{Op: OpPlayback, Playback: &Playback{
+		Viewer: viewers[g.rng.Intn(len(viewers))], Action: PlayAction(g.rng.Intn(6)), Inos: []Ino{ino},
+		Pos: uint64(g.rng.Intn(5)) * 1000, Dur: dur, On: "n1", Now: g.now,
+	}}
+}
+
 func (g *cmdGen) next() Command {
 	g.now += int64(g.rng.Intn(3)) - 1 // occasionally skewed backwards
 	dirs, files := g.files()
@@ -1186,6 +1201,9 @@ func (g *cmdGen) next() Command {
 	name := string(rune('a' + g.rng.Intn(6)))
 	switch g.rng.Intn(20) {
 	case 18, 19:
+		if g.rng.Intn(3) == 0 {
+			return g.playbackCmd(files)
+		}
 		return g.snapshotCmd(name)
 	case 9:
 		c := &Trash{Parent: d.Ino, Name: name, Recursive: g.rng.Intn(2) == 0, Now: g.now}

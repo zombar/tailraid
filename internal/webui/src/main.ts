@@ -13,6 +13,7 @@ import { player as audio } from "./audio.ts";
 import * as stats from "./stats.ts";
 import * as search from "./search.ts";
 import * as mediaTab from "./media.ts";
+import * as viewer from "./viewer.ts";
 import * as account from "./account.ts";
 import type { Report } from "./api.ts";
 
@@ -89,8 +90,28 @@ function rawRest(hash: string): string {
   return i < 0 ? "" : where.slice(i + 1);
 }
 
+/** mainHash is the route the page under the viewer shows; "" before the first. */
+let mainHash = "";
+
+/**
+ * route draws the hash. The viewer's routes (docs/13 §10a) draw over the page, which stays
+ * as it was, so leaving the viewer for the same route shows it unchanged, scroll and all.
+ */
 function route(): void {
-  const { head, ctx, query } = parse(location.hash || "#/");
+  const hash = location.hash || "#/";
+  if (viewer.isOverlay(hash)) {
+    if (!mainHash) renderMain("#/media"); // opened from a link: the tab under it
+    viewer.open(hash, mainHash);
+    return;
+  }
+  viewer.close();
+  if (hash === mainHash) return;
+  renderMain(hash);
+}
+
+function renderMain(hash: string): void {
+  mainHash = hash;
+  const { head, ctx, query } = parse(hash);
   dispose?.();
   dispose = null;
   clear(view);
@@ -101,10 +122,10 @@ function route(): void {
     dispose = browser.render(view, ctx);
   } else if (head === "media") {
     tab = "media";
-    dispose = mediaTab.render(view, decodeHashPath(rawRest(location.hash)));
+    dispose = mediaTab.render(view, decodeHashPath(rawRest(hash)), query);
   } else if (head === "search") {
     tab = "";
-    dispose = search.render(view, decodeHashPath(rawRest(location.hash)).slice(1), query);
+    dispose = search.render(view, decodeHashPath(rawRest(hash)).slice(1), query);
   } else if (head === "file" || (head === "trashfile" && ctx.root !== undefined)) {
     tab = "files";
     dispose = player.render(view, ctx);

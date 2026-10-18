@@ -739,7 +739,8 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 // definition, not in the member table yet. A non-member's body is read (64 KiB at most)
 // only to learn the op; update_addr is then allowed when WhoIs(src) is the StableID of the
 // member named in it, and it changes nothing but that member's address.
-// A member's unsigned ops (update_addr, set_version) name its own row only (I-322).
+// A member's unsigned ops (update_addr, set_version, set_capacity) name its own rows only
+// (I-415).
 func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 	src, ok := SourceAddr(r)
 	if !ok {
@@ -788,7 +789,7 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 	}
 	// a caller without a row index comes from an authorizer that does not tell members
 	// apart (the test harness's AllowAll): nothing to pin to
-	if op.SelfOnly() && caller.Idx != 0 && caller.Idx != op.NodeIdx {
+	if op.SelfOnly() && caller.Idx != 0 && !s.ownRow(caller.Idx, op) {
 		writeErr(w, http.StatusForbidden, op.Op+": a member names its own row only")
 		return
 	}
@@ -929,6 +930,25 @@ func (s *Server) enforcing() bool { return s.o.Signed != nil && s.o.Signed.Enfor
 // actor is the user a request acts for: nobody until the cluster has users or when the
 // op needs none, else the user its Tailraid-Sig names, or ErrUnauthorized (I-344). The
 // header is checked before anything of the body is applied.
+// ownRow reports whether a member's unsigned op names a row of the caller's: its own
+// device row, or for set_capacity a disk it hosts (the maintenance tick registers each
+// budget with no user to sign for, docs/01 §Node budget, I-415).
+func (s *Server) ownRow(caller meta.NodeIdx, op MemberOp) bool {
+	if op.Op != "set_capacity" {
+		return caller == op.NodeIdx
+	}
+	if s.o.Members == nil {
+		return false
+	}
+	members := s.o.Members()
+	for i := range members {
+		if n := &members[i]; n.Idx == op.NodeIdx {
+			return n.Kind == meta.KindDisk && n.Host == caller && n.State != meta.Removed
+		}
+	}
+	return false
+}
+
 func (s *Server) actor(r *http.Request, need Need, body []byte) (meta.UserIdx, meta.UserKeyID, error) {
 	if need == NeedNone || !s.enforcing() {
 		return 0, meta.UserKeyID{}, nil

@@ -45,6 +45,7 @@ var phases = []phase{
 	{"19 snapshots", phaseSnapshots},
 	{"20 stats", phaseStats},
 	{"21 search and media", phaseSearch},
+	{"35 watching and media search", phaseWatch},
 	{"22 copies under faults", phaseCopies},
 	{"23 many users at once", phaseMultiUser},
 	{"24 secrets", phaseSecrets},

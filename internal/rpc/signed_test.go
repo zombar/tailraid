@@ -158,11 +158,59 @@ func TestAdminOp_Needs_Refinements(t *testing.T) {
 		op   string
 		want Need
 	}{
-		{"update_addr", NeedNone}, {"set_version", NeedNone}, // a member's own row (the handler pins them to it)
+		{"update_addr", NeedNone}, {"set_version", NeedNone}, {"set_capacity", NeedNone}, // a member's own rows (the handler pins them)
 		{"remove", NeedAdmins}, {"set_voter", NeedAdmins}, {"add_disk", NeedAdmins},
 	} {
 		if got := (MemberOp{Op: tc.op}).Needs(); got != tc.want {
 			t.Errorf("member op %s needs %d, want %d", tc.op, got, tc.want)
 		}
+	}
+}
+
+// A host registers its own disks' budgets unsigned once users exist (the maintenance
+// tick has no user to sign for, docs/01 §Node budget), and only its own: set_capacity
+// naming another host's disk, or a device row, is refused with 403 before the handler.
+// Invariant: I-415
+func TestRPC_SetCapacityOwnDiskUnsigned(t *testing.T) {
+	e := newEnvWith(t, func(o *Options) {
+		o.Signed = &Signed{
+			Verify: func(string, netip.Addr, string, string, []byte) (meta.UserIdx, meta.UserKeyID, error) {
+				return 0, meta.UserKeyID{}, users.ErrUnauthorized
+			},
+			Enforcing: func() bool { return true },
+			IsAdmin:   func(meta.UserIdx) bool { return false },
+		}
+	})
+	self, _ := e.app.fsm.NodeByID("n1")
+	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "d1", Name: "one/1", Kind: meta.KindDisk, Host: self.Idx, Capacity: 1 << 30}}})
+	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "n2", Name: "two", Kind: meta.KindDevice, Addr: "100.64.9.9"}}})
+	other, _ := e.app.fsm.NodeByID("n2")
+	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "d2", Name: "two/1", Kind: meta.KindDisk, Host: other.Idx, Capacity: 1 << 30}}})
+	own, _ := e.app.fsm.NodeByID("d1")
+	foreign, _ := e.app.fsm.NodeByID("d2")
+	c := e.client()
+	for _, tc := range []struct {
+		name string
+		idx  meta.NodeIdx
+		want int
+	}{
+		{"own disk", own.Idx, http.StatusOK},
+		{"another host's disk", foreign.Idx, http.StatusForbidden},
+		{"own device row", self.Idx, http.StatusForbidden},
+		{"another device row", other.Idx, http.StatusForbidden},
+		{"no such row", 99, http.StatusForbidden},
+	} {
+		b, _ := json.Marshal(MemberOp{Op: "set_capacity", NodeIdx: tc.idx, Capacity: 2 << 30})
+		resp, err := c.do(ctx, http.MethodPost, e.addr, "/v1/members", b, map[string]string{"Content-Type": "application/json"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tc.want {
+			t.Errorf("%s: %d, want %d", tc.name, resp.StatusCode, tc.want)
+		}
+	}
+	if ops := e.joiner.ops; len(ops) != 1 || ops[0].NodeIdx != own.Idx {
+		t.Errorf("the handler ran %+v, want only the own disk's", ops)
 	}
 }

@@ -163,11 +163,15 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /api/tags?path=&in=` | – | audio only (400 otherwise): `{title,artist,album,album_artist,track,tracks,disc,year,genre,has_cover}` from the file's ID3v2, ID3v1, MP4, FLAC or Ogg tags (§6); a file without tags, or one whose tags do not parse, answers 200 with empty fields, never an error |
 | `POST /api/pin` `{"path","pinned"}` | required | 200 `{"path","pinned","bytes"}`; directories only (400); local to the node serving the page (§4); an admin's once users exist (403 for anyone else, docs/21 §3) |
 | `GET /api/pins` | – | `{"size","used","pinned_bytes","pins":[{path,bytes,cached_bytes}]}`, the same object `/api/status` carries as `cache` |
-| `GET /api/search?q=&under=&limit=` | – | `{"query","hits":[{path,type,size,mtime,ino,match,title?,artist?,album?,terms:[{term,off}]}],"index"?}`: the words of `q` ANDed, the last as a prefix, names from the FSM and tags and contents from the index (docs/18 §6); `under` limits to a live folder; `limit` 50 by default, 200 at most, 400 outside `1..200`; `index: "unavailable"` when the node has no loadable index and only names answered; never an entry in the trash or under `/.tailraid` |
+| `GET /api/search?q=&under=&limit=&scope=` | – | `scope=files` (the default): `{"query","hits":[{path,type,size,mtime,ino,match,title?,artist?,album?,terms:[{term,off}]}],"index"?}`: the words of `q` ANDed, the last as a prefix, names from the FSM and tags and contents from the index, a field term (`actor:`, docs/18 §6a) matching the files of the catalogue items it matches (docs/18 §6); `under` limits to a live folder; `limit` 50 by default, 200 at most, 400 outside `1..200`; `index: "unavailable"` when the node has no loadable index and only names answered; never an entry in the trash or under `/.tailraid`. `scope=media`: `{"query","libs":[{path,kind,items:[…]}]}`, the catalogue items the query matches as `/api/media` lists them (with the viewer's state, §10c), grouped by library in the libraries' order, at most `limit` items in all (§10d); a malformed query (docs/18 §6a) → 400 `{"error","at"}` |
+| `GET /api/search/suggest?q=&scope=media&limit=` | – | `{"groups":[{field,values:[{value,counts:{movie?,show?,album?,game?}}]}]}`: the catalogue's values of each field whose folded words start with the last word of `q` and that, with the rest of `q`, match at least one item; fields in the order actor, director, genre, title, artist; values by count descending then folded value; `limit` (default 8, at most 50) values per group (docs/18 §6a, I-413) |
 | `GET /api/render?path=&in=` | – | `text/html; charset=utf-8`: the file rendered as a document by the node's own markdown renderer (§4); `.md` and `.markdown` only, else 400; a source over `TEXT_MAX` (1 MiB) → 413; the ETag rule of `/files/`; `Cache-Control: no-cache` |
 | `GET /api/media` | – | `{"libs":[{path,kind}]}`: every live flagged folder in kind-then-path order (docs/18 §9), the Media tab's sections |
-| `GET /api/media?lib=&offset=&sort=` | – | `{"lib":{path,kind,count},"items":[{ino,path,kind,title,sort_title,year?,genres?,rating?,runtime?,poster?,fanart?,thumb?,video?,video_ino?,video_version?,video_thumb?,nsfw,children?}]}`: a library folder's items, structure live from the FSM and metadata from the catalogue (§10, docs/18 §8); `sort` is `title` (default), `year` or `added`; at most `MediaPage` (500) items from `offset`; a path that is not a flagged folder → 404 |
-| `GET /api/media?item=&in=` | – | one item with `plot`, `people`, `seasons:[{n,poster?,episodes:[…]}]` for a show or `tracks` (through the tags of §6) for an album; `in=` reads a deleted root as `ls` does |
+| `GET /api/media?lib=&offset=&sort=` | – | `{"lib":{path,kind,count},"items":[{ino,path,kind,title,sort_title,year?,genres?,rating?,runtime?,poster?,fanart?,thumb?,video?,video_ino?,video_version?,video_thumb?,nsfw,children?}]}`: a library folder's items, structure live from the FSM and metadata from the catalogue (§10, docs/18 §8); `sort` is `title` (default), `year`, `added` or, in a music library, `played` (§10c); every item carries the viewer's `progress`, `watched`, `next` or `plays` (§10c, I-410); at most `MediaPage` (500) items from `offset`; a path that is not a flagged folder → 404 |
+| `GET /api/media?item=&in=` | – | one item with `plot`, `people`, `seasons:[{n,poster?,episodes:[…]}]` for a show or `tracks` (through the tags of §6) for an album, with `track_play:[{name,plays,progress?}]` for the tracks the viewer has rows for; `in=` reads a deleted root as `ls` does |
+| `GET /api/media?continue=1` | – | `{"items":[…]}`: the viewer's Continue watching row (§10c, I-409), at most `ContinueMax` (20) items newest first, each with `progress` or `next_up`; no viewer → an empty list |
+| `GET /api/playback?path=` | – | `{"pos","dur","watched","plays","hidden","at","on"}`: the viewer's row for a file (§10c); no row → 404; no viewer → 404 |
+| `POST /api/playback` `{"path","pos","dur","final"?}`, `{"path","played":true}`, `{"paths":[…],"action":"watched"\|"unwatched"}` or `{"path","action":"hide"}` | required | 204; the viewer is the request's (§10c, I-407), the body never names one; a position within `PlaybackEvery` of the last one proposed for the pair and not `final` is dropped, still 204 (I-408); a path that is not a live file → 404 (for a batch, per item in `{"failed":[…]}` with 200); no viewer → 403; a user without Read on the file → 403; a member too old for codec 17 → 503 `Retry-After: 30`; at most `MaxBatch` paths |
 | `GET /api/snapshots` | – | `{"mirrors":[{id,name,host,self,path?,online,reason?,used,free,total,last_seen?,warn?,syncing?:{id,snapshot,read,total,bytes_new}}],"snapshots":[{id,mirror,name,at,auto,state,files,bytes,new_bytes,missing}],"schedule":{every,hourly,daily,weekly,monthly,next?}}`, snapshots newest first, from the catalogue: offline mirrors' snapshots included (docs/16 §5); a mirror's `name` is its directory under `/.snapshots` (`pike-m1`), its state from the probes (docs/16 §1); `warn` says why its card warns (`stale`, `reserve`, `incomplete`); `schedule` is this node's `mirrors` config, `next` when the newest automatic snapshot on an online mirror falls due |
 | `POST /api/snapshot` `{"name"?,"mirror"?}` | required | 201 the begun rows (one per online mirror, or the one named); the serving gateway flushes its dirty files first; a taken name or a mirror already syncing → 409; an offline mirror → 409 `{"error","offline":true}`; a member too old for codec 7 → 503 |
 | `GET /api/versions?path=` | – | `{"versions":[{key,size,mtime,snapshots:[{id,mirror,name}],current}],"offline":[{mirror,count}]}`: the file's distinct contents on the online mirrors, newest first, the live one `current` with the snapshots holding it (possibly none); `offline` counts what the offline mirrors would add |
@@ -210,7 +214,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   of every user operation with 400.
 - Request bodies are bounded before they are decoded (I-116): 4 KiB for the routes that
   name one entry (`mkdir`, `rename`, `restore`, `purge`, `flags`, `pin`), 256 KiB for
-  `move` and `delete` (a batch of `MaxBatch` paths of `MaxPathLen` bytes does not fit,
+  `move`, `delete` and `playback` (a batch of `MaxBatch` paths of `MaxPathLen` bytes does not fit,
   which is the point: the page sends a larger selection in several requests), 256 KiB
   for a thumbnail.
 
@@ -561,8 +565,10 @@ across them, and `item=` any of the folders answers the whole show, its seasons 
 of every folder's (two copies of one episode are both listed, by path). The grouping uses
 the names only, so it is the same before and after a pass. A section lists at most
 `MediaPage` (500) items a page from `offset`, sorted by `sort_title` then path, the same on
-every node. An item is listed only while its structure says so: a film folder with a video in it, a show folder, an album folder by the rule of §6; an episode file without `SnnEnn`, `nnxnn` or `Episode nn` in its name is not an episode, and one named only by its show and number is titled "Episode N". Below 480 px the season strip and the episode list run under the poster column. "Play" opens the file route for a film or an episode and hands an album to the
-now-playing bar (§6); "Open folder" goes to the file browser.
+every node. An item is listed only while its structure says so: a film folder with a video in it, a show folder, an album folder by the rule of §6; an episode file without `SnnEnn`, `nnxnn` or `Episode nn` in its name is not an episode, and one named only by its show and number is titled "Episode N". Below 480 px the season strip and the episode list run under the poster column. "Play" opens the viewer (§10a) for a film or an episode, never the file route, and an
+album opens the album viewer (§10b), never the folder; "Open folder" goes to the file
+browser. People and genres on a detail page or in the viewer's facts are links into the
+tab's search (§10d).
 
 A **ROMs** library (docs/18 §8b, I-279) lists its platforms as cards (4:3, the platform's
 display name and its folder name, the game count; the art is the folder's logo or poster, else
@@ -591,6 +597,135 @@ catalogue entry, or, in the file browser's tiles, from a folder's `card` (`title
 `/api/ls`, which the node fills from the name alone for every folder under a library
 whose cover is not known (a folder of video no browser can frame never settles), reading
 no file (I-165); the tile draws it when no art arrives.
+
+### 10a. The viewer (I-414)
+
+`#/media/play/<path>` is a film or an episode in a modal over the Media tab: on the media
+ground (`--media-bg`) in the dark tokens whatever the theme, the item's fanart (else its
+poster, else nothing) blurred behind, a bar with **← <library>** (the library folder's
+name) and a close button, the screen, and under it the item's facts folded to one line
+(`details.mfacts`: title, year, runtime, rating; an episode's show, number, runtime and air
+date), which unfold to the plot, the genres and the people as links (§10d) and the file
+with its folder. Nothing else of the detail page is drawn: no hero, no people grid, no
+season strip. Back, close and Esc return to the library or detail page the viewer was
+opened from, at the scroll position it had; the router keeps that page's DOM, so nothing
+is fetched again. The fold remembers its state in `localStorage`.
+
+Play is a click, so the page asks for fullscreen in the same task
+(`Element.requestFullscreen` on the screen element, which holds the `<video>` and the
+page's own overlays; `HTMLVideoElement.webkitEnterFullscreen` where only the video can go
+fullscreen, as on an iPhone, whose overlays are then the system's). In fullscreen a top
+gradient carries a back arrow and the title, and fades with the browser's controls after
+3 s without a pointer. Leaving fullscreen (the arrow, Esc, the browser's own exit) lands
+in the viewer, still playing, with a fullscreen button over the screen's corner. A refused
+fullscreen (a browser that answers with an error) plays in the viewer.
+
+An episode adds a row with the next episode's frame and name and previous and next
+buttons, and the season as a folded **Episodes** list (`details.mfold`, the rows of the
+detail page with their ticks and progress). The next episode is the next by season and
+number in the show's catalogue order, across a season's end, never into or out of
+Specials (season 0). In the last 30 s of an episode with a next one, a card counts down
+10 s and plays it, in fullscreen if the screen is; Cancel keeps the credits. At the end
+of a film, of an episode with no next one, or after Cancel, the screen says watched and
+offers **Play again** and **Back to <library or show>**.
+
+Opening an item with a resume point (§10c) shows the frame at it, dimmed, with **Resume
+from h:mm:ss** (the default, Enter) and **Start from the beginning**; either goes
+fullscreen. A video the browser cannot play (`canPlayType` says no, or the element
+errors before its first frame) says so on the screen with a download link, and its
+position is never touched. Opening a video pauses the now-playing bar (§6), as the file
+view does.
+
+### 10b. The album viewer and the now-playing view (I-414)
+
+`#/media/album/<path>` is an album from a music library in the same modal: the cover
+blurred behind, **← <library>**, the cover large beside the album, the artist (a link,
+§10d), the year, genres, track count and length and how often this viewer has played it,
+**Play**, **Shuffle** and **Open folder**, the artist's biography folded when an
+`artist.nfo` exists, then the tracks with this viewer's play count and length. It never
+shows the folder browser, its breadcrumbs or its toolbar. Play hands the album to the
+now-playing bar (§6), which stays in reach under the modal: the modal stops above the bar
+(`--mv-bottom`). A track over 20 min with a resume point (§10c) says where it stopped
+and shows its progress, and Play on the album starts at that track and position when it
+is the album's first unfinished one; a shorter track never resumes.
+
+A tap on the bar's cover or title opens the **now-playing view** in the modal: the cover as
+large as the window allows, the title, artist, album and year, the seek slider, previous,
+play/pause and next, shuffle and repeat, and the queue folded as **Up next**; **Album**
+opens the album viewer of what plays, back returns to where the tap came from, and the
+bar hides while the view is open. An album card in the Media tab links the album viewer.
+
+### 10c. Watching: positions, watched, play counts, Continue watching (I-407..I-410)
+
+The node keeps, for each **viewer**, a playback row per file it has played (docs/02
+§Commands, op 34): the position and duration in milliseconds, watched, the play count,
+hidden, when and on which node. The viewer is the request's signed-in user once the
+cluster has users (`u:<idx>`), else the Tailscale login the web UI's member-or-same-user
+check already resolved (`t:<login>`, I-68); a request with neither (a tagged device's
+browser) has no viewer, reads no rows and writes none. The viewer comes from the request,
+never from its body: a page can read and change only its own viewer's rows, and with
+users only rows of files the user may read.
+
+The page reports, through `POST /api/playback`:
+
+| When | Report |
+|---|---|
+| every 15 s while a video or a track over 20 min plays, and at pause, at a seek once it settles, at leaving the page or the viewer | `{path, pos, dur}` (`final` on the last four) |
+| a video or track ends | `{path, pos: dur, dur, final}` |
+| a track reaches 50 % or 4 min, whichever comes first, once per play | `{path, played}` |
+| Mark watched or unwatched (a row's menu, the season menu) | `{paths, action: "watched" \| "unwatched"}` |
+| Remove from Continue watching | `{path, action: "hide"}` |
+
+The node proposes a position for a `(viewer, file)` at most once per `PlaybackEvery`
+(10 s) and drops a report that comes sooner (the page reports every 15 s, so only the
+extra reports of a seek are dropped), but proposes every `final`, `played` and action at
+once (I-408); a report a codec-16 cluster would refuse is answered 503 whether it would
+have been dropped or not. The leader's apply derives everything else (I-405): a position is
+clamped to `[0, dur]`; the row is **watched** once `pos ≥ 0.9 · dur`, or `dur > 30 min`
+and `pos ≥ dur − 5 min`, and stays so until marked unwatched; a later position below the
+mark on a watched row starts a rewatch (watched stays, the position is kept); hidden is
+cleared by any later position. A video offers to **resume** from a position of at least
+60 s below the watched mark; a track only when it is longer than 20 min.
+
+`GET /api/media` carries the viewer's state on every item it lists (I-410): `progress`
+(`{pos, dur, watched, at, on}`) on a film and an episode from its video's row; on a show
+`watched` (every episode in a numbered season watched) and `next` (the episode in
+progress, else the one after the last watched by catalogue order, else the first); on an
+album `plays` (the sum over its tracks); `item=` of an album lists its tracks with their
+`plays` and, for a long one, its `progress`. A music library sorts by `sort=played` too
+(the album's `plays` descending, then `sort_title`, then path). The film hero's Play reads
+**Resume · 1 h 15 left** with **Start over** beside it, a show's **Resume S01E02 · 26 min
+left** or **Play S01E03**, and a season menu marks the season watched or unwatched.
+Posters carry their progress along the foot and a tick in the corner once watched (a
+show's once all its episodes are); an episode row its progress under the title and a
+tick before it, watched rows dimmed.
+
+`GET /api/media?continue=1` is the **Continue watching** row (I-409), at most
+`ContinueMax` (20) items newest first by the row's time: every file of the viewer's rows
+under a live library that is not watched, not hidden and at least 60 s in (a film, an
+episode, a track over 20 min, each as its item with `progress`), and for every show whose
+newest row (by time) is a watched episode, that episode's next one when it has no row of
+its own, marked `next_up`. Items in the trash or under a library flag since removed drop
+out. The row heads the tab above the libraries, frames rather than posters, each with its
+progress, what is left and a menu (Mark watched, Remove from Continue watching); a tap
+opens the viewer, which resumes. The row is absent while empty.
+
+### 10d. The Media tab's search (I-411..I-413)
+
+The tab has its own search field above the row and the libraries, apart from the
+header's, which keeps searching files (§3). As the viewer types, `GET
+/api/search/suggest?q=&scope=media` answers the field values that start with the last
+word, grouped by field (actors, directors, genres, titles, artists) with how many items
+each matches by kind; arrows move, Enter or a tap turns the pick into a chip
+(`actor:"Tom Hanks"`), Backspace in the empty field removes the last chip, a tap on a
+chip removes it, Esc closes the list. The chips and the words left over make the query of
+`GET /api/search?q=&scope=media`, whose hits are the catalogue's items (films, shows,
+albums, platforms' games) grouped by library in the libraries' order and sorted as the
+library sorts by default, drawn as the libraries' posters with the viewer's progress.
+The tab's URL carries the query (`#/media?q=…`), so Back and a shared link land on the
+same hits; a person or a genre anywhere in the tab is that one chip. With no hit the
+page says what was asked and offers to drop the last chip. The engine, the grammar and
+the matching are docs/18 §6a's, the same for both fields (I-412).
 
 ## Design
 
@@ -811,13 +946,26 @@ sort marks `▴ ▾`. None of them is drawn as emoji.
 | Search box | `header.top form.search` > `input[type=search]` + `button` | in the header after the tabs; `/` focuses it, Escape clears it, Enter opens `#/search/<q>`; one focus ring around input and button; below 840 px it shares the tabs' row, and takes a row of its own on a phone |
 | Search results | `section.results` > `.toolbar` (the count, an "in this folder" `label.toggle`) + `ol` > `li.hit` > `a.hname` (mono) + `.hpath` (dim) + `.hwhy` (`.badge` `name`, `tags` or `content`) + `.hsnip` (the snippet with `mark`) | `.empty` "no matches for `…`"; a `.note` "index unavailable: names only" when the node has no index; a `.hsnip.loading` row while a snippet is fetched |
 | Markdown document | `article.md.md-doc` | a 760 px measure with a gutter hairline on the left and faint `##`, `###` markers in the margin before `h3`–`h6` (the file's `#` is the page's `h2`); headings in mono as the UI's; code on `--surface`; tables with `--line` hairlines; `mark` in the accent tint; "Rendered \| Raw" as a `.seg` in the toolbar |
-| Library section | `section.lib` > `details` > `summary` > `h2` (▾/▸, title + `.badge.lib` kind + `.count`) + `.toolbar` (`.seg` title \| year \| added) + `.posters` | one per flagged folder; `movies`, `tv`, `music` set the poster shape; a section folds away on its heading, the choice kept per viewer in `localStorage`, and a folded library is listed only once opened |
+| Library section | `section.lib` > `details` > `summary` > `h2` (▾/▸, title + `.badge.lib` kind + `.count`) + `.toolbar` (`.seg` title \| year \| added, \| most played for music) + `.posters` | one per flagged folder; `movies`, `tv`, `music` set the poster shape; a section folds away on its heading, the choice kept per viewer in `localStorage`, and a folded library is listed only once opened |
 | Poster grid | `.posters` > `a.poster` > `.art` (`img`, or the kind glyph; `.ov.br` the runtime or the season count) + `.ptitle` + `.pyear` (year left, a note right) | the file tile's card: `auto-fill, minmax(min(140px, 100%), 1fr)` (120 px under 600 px), 24/16 px gaps; `.art` is 2:3 cropped to fill on `--surface` with an 8 px radius and no frame, square for music; `nsfw` blurs the art; `missing` shows the title card in a dashed outline; loaded lazily like tiles; a film without a poster draws its video's frame, and a show without one its first regular episode's (the lowest season above the specials; `video` in `/api/media`) |
-| Hero | `section.hero` > `img.backdrop` + `.hero-body` (`img.poster`, `h1`, `.facts`, `.plot`, `.actions`, `.people`) | the fanart as a full-width background 32 vh tall, `object-fit: cover`, darkened to 55 % and faded into `--bg` with a gradient so the ink stays legible in both themes; the poster overlaps its bottom edge; `.facts` year · runtime · rating · genres · mpaa in `--dim`; `.plot` sans 15/1.55 on a 65-ch measure; `.actions` "Play" and "Open folder" buttons; `.people` director and up to six actors as text chips; `.hero.no-art` is a plain `--surface` band, `.hero.poster-only` uses the poster's blurred copy at low opacity |
+| Hero | `section.hero` > `img.backdrop` + `.hero-body` (`img.poster`, `h1`, `.facts`, `.plot`, `.actions`, `.people`) | the fanart as a full-width background 32 vh tall, `object-fit: cover`, darkened to 55 % and faded into `--bg` with a gradient so the ink stays legible in both themes; the poster overlaps its bottom edge; `.facts` year · runtime · rating · genres · mpaa in `--dim`; `.plot` sans 15/1.55 on a 65-ch measure; `.actions` "Play" (or "Resume · … left" as `.primary` with "Start over", §10c) and "Open folder" buttons, the item's `.prog` under them; `.people` director and up to six actors as `a.person` links (§10d); `.hero.no-art` is a plain `--surface` band, `.hero.poster-only` uses the poster's blurred copy at low opacity |
 | Season strip | `.seasons` > `button[aria-pressed]` per season | the selected season's episodes follow; "Specials" last |
-| Episode list | `table.episodes` > `tr` > `.no` (`SnnEnn` mono) + `.thumb` (16:9 at 96 px) + `.title` + `.dur` + `.plot.small.dim` (clamped to two lines) | a row opens the player; `playing` on the one in the bar |
+| Episode list | `table.episodes` > `tr` (`watched`) > `.no` (`SnnEnn` mono) + `.thumb` (16:9 at 96 px) + `.title` (a tick when watched, `.prog` when started) + `.dur` + `.plot.small.dim` (clamped to two lines) | a row opens the viewer (§10a); `playing` on the one the viewer plays |
 | Library badge | `.badge.lib` | the mono word `movies`, `tv` or `music` after the breadcrumb's last segment (effective) and in rows and tiles (own) |
 | Library menu row | `.toolbar details.menu` > `label.menu-row.library` > `select` | "Library" with none · movies · tv · music; disabled with the reason on the root, in the trash and while a member reads a codec older than 6 |
+| Viewer | `.mviewer.theme-dark` > `img.mbackdrop` + `.mbar` (`a.back` ← library, `.mtitle`, close `.icon-btn`) + `.mbody` > `.mscreen` (`video`, `.fs-btn`, a `.mprompt` over it) + `details.mfacts` (`summary` > `h1` + facts; `.mmore` > `.plot`, `.mlinks` of `a.genre` and `a.person`) | a fixed modal on `--media-bg` in the dark tokens on the header's layer, after it in the page; the backdrop blurred to 35 %; the screen 16:9 within 72 vh; below 600 px the screen runs edge to edge and the bar keeps back and close (§10a) |
+| Fullscreen overlay | `.mscreen.fs` > `.fs-top` (back `.icon-btn`, `.fs-name` title + `.small`) + `.upnext` (`img`, `.ulabel` countdown, `.uname`, `.uacts`: Play now `.primary`, Cancel) | the top gradient fades with the browser's controls; the up-next card in the bottom right, full width under 600 px without its frame |
+| Prompt | `.mprompt` > icon or `.mq` + `.prog` + `.small` + `.acts` | over the screen on the media ground at 70 %: resume or start over, watched with the ways on, a file the browser cannot play |
+| Next episode | `.mnext` > `img` + `.nname` (Next · SnnEnn, `.small` title and length) + `.nacts` (previous `.icon-btn`, Next `.primary`) | under the facts in an episode's viewer; the frame drops under 600 px |
+| Fold | `details.mfold` > `summary` (chevron, name, `.small` count) | Episodes in the viewer, Up next in the now-playing view; closed by default |
+| Album viewer | `.mviewer` > `.mbody` > `.malbum` (`img.cover`, `h1`, `a.artist`, `.meta`, `.actions`) + `table.tracks` with `td.plays` | 280 px cover (200 under 840, centred and stacked under 600); play counts drop under 600 px; the playing row on the accent at 16 %; a long track's row carries its resume point and `.prog` |
+| Now-playing view | `.mviewer` > `.mnow` (`img.cover`, `.ntitle`, `.nsub`, `.seek`, `.transport` with `button.big`, `.modes`, `details.mfold`) | the cover `min(400px, 80vw, 48vh)`; the bar hidden while open |
+| Primary button | `button.primary`, `.btn.primary` | the one action a screen leads with (Resume, Play, Next) on the accent with the ground's ink; one per screen |
+| Progress | `.prog` (`--p` the share) | 4 px; along a poster's, a frame's or the screen's foot on the overlay ground; under an episode's or track's title at most 240 px; under the hero's actions at most 320 px |
+| Watched tick | `.ov.tr` > check icon on posters; a check icon before an episode's title, the row `watched` and dimmed | the accent |
+| Continue watching | `section.continue` > `h2` (+ `.count`) + `.crow` > `.ctile` (`a` > `.cart` (`img`, `.ov.bl` next up, `.ov.br` left, `.prog`) + `.ctitle` + `.csub`; `details.menu` ⋯) | one row scrolling sideways with snap, 240–280 px frames (72 % of the width under 600 px); absent while empty |
+| Media search | `.msearch` > `label.mfield` (search icon, `button.qchip`s with `b` field, `input[type=search]`) + `ul.msuggest` (`li.mgroup`, `li.mopt` > `.mkind` + value with `mark` + `.mcount`) + `.mhits` | above the row; a chip is one button, 48 px for a finger and 32 px for a mouse; the list floats under the field on the menus' layer |
+| Person and genre links | `a.person` (+ `.small.dim` director), `a.genre` | 32 px chips linking `#/media?q=actor:"…"`, `director:"…"`, `genre:"…"` |
 | Theme switch | `header.top button.theme` > `svg.icon` + `span` | system (half disc) · light (sun) · dark (moon); the word shows from 1200 px; an icon button below; cycles on tap |
 | As-of menu | `.toolbar details.menu.asof` > `summary` (a dim "as of", then "Now" or the snapshot's name) + `.menu-body` of `.menu-group` (the mirror's name, its online dot) and `label.menu-row` (radio + name (+ `.badge` manual) + `.small.dim` when and kind) + `.menu-foot` | floats over the listing (the folder menu's z-order); newest first per mirror after "Now"; an offline mirror's rows `aria-disabled` with "offline: attach it to browse"; the foot counts snapshots and links the dashboard |
 | Snapshot banner | `.banner.snapshot` > text + `.actions` (Restore folder to… · Back to now) | above a listing or a file view as of a snapshot: "As of `2026-10-12-0900Z` on `pike-m1` · taken 3 h ago · read-only · 11 items · 2.3 GiB"; accent border and tint (information, not a warning) |
@@ -981,6 +1129,25 @@ placement gives way to legible text: the dashed line keeps the event's true time
     the card waits; plug it back: it goes on. Start a second restore: it queues behind the
     first. Cancel it: no `.tailraid-restore-` file is left. Past 20 snapshots, the table
     pages.
+28. Watching, on a laptop and a phone signed in as the same viewer: Play a film from the
+    Media tab: it goes fullscreen at once with the title and back arrow; Esc lands in the
+    viewer, still playing, facts folded; back returns to the tab where it was. Stop at
+    about a third; on the phone the poster shows the progress, the film's hero says
+    Resume, Continue watching leads with it, and Resume starts within 15 s of where the
+    laptop stopped. On an iPhone, Play uses the system player.
+29. A show: watch an episode to its credits: the up-next card counts down and the next
+    episode plays in fullscreen; the first is ticked and dimmed; mark the season watched
+    and unwatched from its menu; the show's Play follows. Remove an item from Continue
+    watching: it stays gone until it is played again.
+30. Music: an album card opens the album viewer with no folder, back returns to the
+    library; Play keeps the now-playing bar usable under it; the bar's cover opens the
+    now-playing view. A track over 20 min stopped half way resumes there on the other
+    device; play counts rise after half a short track; Most played sorts by them.
+31. Media search: type `tom`, pick an actor, add `genre:drama`: the hits are the films and
+    shows with both, grouped by library; the header's search still lists files only. A
+    person on a hero opens the tab with that one chip; the link in the address bar opens
+    the same hits on another device. Two viewers (two signed-in users, or two tailnet
+    logins) never see each other's progress.
 
 ## Invariants
 
@@ -1198,6 +1365,35 @@ placement gives way to legible text: the dashed line keeps the event's true time
   folder, pages at most `MediaPage` items sorted by `sort_title` then path, answers 404
   for a folder that is not a library and 400 for `offset` or `sort` outside their bounds,
   and two nodes with the same chain and FSM return byte-identical bodies.
+- **I-407** — A playback request's viewer is the request's signed-in user once the cluster
+  has users, else its Tailscale login, else none; the node stamps it on the command and
+  never takes it from the body; `GET` answers only that viewer's rows and `POST` changes
+  only them; a request with no viewer reads no row (404, an empty Continue watching) and
+  writes none (403); with users, a file the user may not read is 403 and none of its rows
+  is listed.
+- **I-408** — The node proposes a position for one `(viewer, file)` at most once per
+  `PlaybackEvery` and drops one reported sooner; a `final` position, a `played` report
+  and every action are proposed at once; a report the gateway or the leader refuses is
+  answered with its status, never 204.
+- **I-409** — `GET /api/media?continue=1` lists at most `ContinueMax` items newest first by
+  row time: every live file of the viewer's rows under a library that is not watched, not
+  hidden and at least 60 s in (a track only when it is longer than 20 min), and for every
+  show whose newest row is a watched episode, its next one by catalogue order (across a
+  season's end, never Specials) when that has no row, as `next_up`; nothing in the trash
+  or outside a library; two nodes with the same FSM and catalogue return byte-identical
+  bodies for one viewer.
+- **I-410** — Every item `/api/media` lists carries the viewer's state from the rows: a
+  film's and an episode's `progress`, a show's `watched` (every episode of its numbered
+  seasons watched) and `next`, an album's `plays` and, on `item=`, each track's `plays`
+  and a long track's `progress`; `sort=played` orders a music library by `plays`
+  descending, then `sort_title`, then path; a viewer without rows gets the bodies of a
+  viewer that never played anything, and I-212's determinism holds per viewer.
+- **I-414** — Play on a film or an episode opens `#/media/play/<path>` and an album card
+  `#/media/album/<path>`, never the file route or the folder; the viewer asks for
+  fullscreen in the click's task and plays in the modal when refused; leaving it returns to
+  the page it was opened from; the modal draws the lookdev's markup (`viewer.html`,
+  `listen.html`) and every class the TypeScript emits for it exists in `app.css` and the
+  lookdev.
 - **I-200** — The theme switch cycles system, light and dark, sets `data-theme` on the
   document (absent for system), keeps the choice in the browser's `localStorage` only and
   applies it before the first view renders; a storage failure means system; the server
@@ -1265,6 +1461,11 @@ placement gives way to legible text: the dashed line keeps the event's true time
 | I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
 | I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |
 | I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_ShowStill`, `TestWebUI_Media_ShowSplitAcrossFolders`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
+| I-407 | `TestWebUI_Playback_ViewerFromRequest_Table`, `TestWebUI_Playback_UserNeedsRead`, `TestWebUI_Playback_RowsAreTheViewers`, `TestSoak_AllPhasesAgainstHarness` |
+| I-408 | `TestWebUI_Playback_Coalesce_Table`, `TestWebUI_Playback_FinalAndActionsAtOnce`, `TestWebUI_Playback_RefusalIsStatus`, `TestSoak_AllPhasesAgainstHarness` |
+| I-409 | `TestWebUI_Continue_Table`, `TestWebUI_Continue_NextUpAcrossSeason`, `TestWebUI_Continue_TrashAndUnflaggedDrop`, `TestWebUI_Continue_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` |
+| I-410 | `TestWebUI_Media_ProgressFields_Table`, `TestWebUI_Media_ShowWatchedAndNext`, `TestWebUI_Media_SortPlayed`, `TestWebUI_Media_AlbumTrackPlays`, `TestWebUI_Continue_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` |
+| I-414 | `TestStatic_MediaRoutesNeverFileRoute`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` (the fullscreen flow and the overlays are manual checks 28–30) |
 | I-297 | `TestChart_MarkLabels_Lane_Table`, `TestChart_Line_MarkLabelsBelowAxis_HeightFixed` |
 | I-283 | `TestCSS_ColoursOnlyInTokens`, `TestCSS_HasColour_Table` |
 | I-284 | `TestCSS_ThemesDefineTheSameTokens` |

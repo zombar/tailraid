@@ -49,6 +49,7 @@ var errByCode = []error{
 	ErrNameTooLong, ErrProtected, ErrInTrash, ErrCodec, ErrSuperseded, // appended; codes are never renumbered
 	ErrSecretKey, ErrSecretFull,
 	ErrAccess, ErrLockout, ErrInvite, ErrUsersFull, // docs/21 (users.go)
+	ErrPlaybackFull, // docs/13 §10c (playback.go)
 }
 
 // ErrorCode maps a sentinel error to its wire code. nil is 0; a non-sentinel error is

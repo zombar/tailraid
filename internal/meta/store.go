@@ -24,9 +24,10 @@ type Stats struct {
 	TrashInodes  int    // inodes in the trash: the deleted roots and everything under them
 	TrashBytes   uint64 // Σ file sizes in the trash
 
-	cls *classTable // the placement classes, kept with the totals (I-377); never copied out
-	due *dueIndex   // the GC and purge queues (I-381, I-382); never copied out
-	lib *libraries  // the library directories (I-384); never copied out
+	cls  *classTable // the placement classes, kept with the totals (I-377); never copied out
+	due  *dueIndex   // the GC and purge queues (I-381, I-382); never copied out
+	lib  *libraries  // the library directories (I-384); never copied out
+	play *playIndex  // the viewers of each played file (I-405); never copied out
 }
 
 // copyInode is the read API's view of an inode: every field but the Children map, which
@@ -505,14 +506,14 @@ func (f *FSM) Stats() Stats {
 	defer f.mu.RUnlock()
 	s := f.stats
 	s.Inodes = len(f.st.Inodes)
-	s.cls, s.due, s.lib = nil, nil, nil
+	s.cls, s.due, s.lib, s.play = nil, nil, nil, nil
 	return s
 }
 
 // computeStats walks the state (Restore, tests); the applier keeps the same totals
 // incrementally.
 func computeStats(st *State) Stats {
-	s := Stats{cls: buildClasses(st), due: buildDue(st), lib: buildLibraries(st)}
+	s := Stats{cls: buildClasses(st), due: buildDue(st), lib: buildLibraries(st), play: buildPlayIndex(st)}
 	s.Inodes = len(st.Inodes)
 	trashed := map[Ino]bool{}
 	for _, set := range st.Trash {

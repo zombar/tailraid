@@ -75,7 +75,13 @@ var PATHS = {
   delete: "M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z",
   drive_file_move: "m488-400-65 65 56 56 161-161-161-161-56 56 65 65H320v80h168ZM160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h240l80 80h320q33 0 56.5 23.5T880-640v400q0 33-23.5 56.5T800-160H160Zm0-80h640v-400H447l-80-80H160v480Zm0 0v-480 480Z",
   edit: "M200-200h57l391-391-57-57-391 391v57Zm-80 80v-170l528-527q12-11 26.5-17t30.5-6q16 0 31 6t26 18l55 56q12 11 17.5 26t5.5 30q0 16-5.5 30.5T817-647L290-120H120Zm640-584-56-56 56 56Zm-141 85-28-29 57 57-29-28Z",
-  playlist_add: "M120-320v-80h280v80H120Zm0-160v-80h440v80H120Zm0-160v-80h440v80H120Zm520 480v-160H480v-80h160v-160h80v160h160v80H720v160h-80Z"
+  playlist_add: "M120-320v-80h280v80H120Zm0-160v-80h440v80H120Zm0-160v-80h440v80H120Zm520 480v-160H480v-80h160v-160h80v160h160v80H720v160h-80Z",
+  arrow_back: "m313-440 224 224-57 56-320-320 320-320 57 56-224 224h487v80H313Z",
+  fullscreen: "M120-120v-200h80v120h120v80H120Zm520 0v-80h120v-120h80v200H640ZM120-640v-200h200v80H200v120h-80Zm640 0v-120H640v-80h200v200h-80Z",
+  check: "M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z",
+  more_vert: "M480-160q-33 0-56.5-23.5T400-240q0-33 23.5-56.5T480-320q33 0 56.5 23.5T560-240q0 33-23.5 56.5T480-160Zm0-240q-33 0-56.5-23.5T400-480q0-33 23.5-56.5T480-560q33 0 56.5 23.5T560-480q0 33-23.5 56.5T480-400Zm0-240q-33 0-56.5-23.5T400-720q0-33 23.5-56.5T480-800q33 0 56.5 23.5T560-720q0 33-23.5 56.5T480-640Z",
+  replay: "M480-80q-75 0-140.5-28.5t-114-77q-48.5-48.5-77-114T120-440h80q0 117 81.5 198.5T480-160q117 0 198.5-81.5T760-440q0-117-81.5-198.5T480-720h-6l62 62-56 58-160-160 160-160 56 58-62 62h6q75 0 140.5 28.5t114 77q48.5 48.5 77 114T840-440q0 75-28.5 140.5t-77 114q-48.5 48.5-114 77T480-80Z",
+  error: "M480-280q17 0 28.5-11.5T520-320q0-17-11.5-28.5T480-360q-17 0-28.5 11.5T440-320q0 17 11.5 28.5T480-280Zm-40-160h80v-240h-80v240Zm40 360q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Z"
 };
 function icon(name) {
   return svg("svg", { class: "icon", viewBox: "0 -960 960 960", "aria-hidden": "true" }, svg("path", { d: PATHS[name] }));
@@ -116,12 +122,12 @@ function wire(button) {
     button.setAttribute("aria-label", label);
     button.replaceChildren(GLYPHS[t](), Object.assign(document.createElement("span"), { textContent: t }));
   };
-  let current2 = stored();
-  draw(current2);
+  let current3 = stored();
+  draw(current3);
   button.addEventListener("click", () => {
-    current2 = next(current2);
-    apply(current2);
-    draw(current2);
+    current3 = next(current3);
+    apply(current3);
+    draw(current3);
   });
 }
 apply(stored());
@@ -200,6 +206,13 @@ async function putThumb(path, version, jpeg) {
   const r = await fetch(`/api/thumb?path=${encodeURIComponent(path)}&version=${version}`, { method: "PUT", headers: { [HEADER]: "1", "Content-Type": "image/jpeg" }, body: jpeg });
   if (!r.ok) throw await apiError(r);
 }
+async function report(r, keepalive = false) {
+  const res = await fetch("/api/playback", { method: "POST", keepalive, headers: { [HEADER]: "1", "Content-Type": "application/json" }, body: JSON.stringify(r) });
+  if (!res.ok) throw await apiError(res);
+}
+var continueRow = () => call("/api/media?continue=1");
+var mediaSearch = (q) => call("/api/search?scope=media&limit=200&q=" + encodeURIComponent(q));
+var suggest = (q) => call("/api/search/suggest?scope=media&q=" + encodeURIComponent(q));
 function media(lib, sort = "title", offset = 0) {
   if (lib === void 0) return call("/api/media");
   return call(`/api/media?lib=${encodeURIComponent(lib)}&sort=${sort}&offset=${offset}`);
@@ -252,10 +265,10 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 function upload(path, file, onProgress, onNote) {
-  let current2 = null;
+  let current3 = null;
   let aborted = false;
   const track = (x) => {
-    current2 = x;
+    current3 = x;
   };
   const promise = (async () => {
     if (file.size <= PART) {
@@ -299,7 +312,7 @@ function upload(path, file, onProgress, onNote) {
     promise,
     abort: () => {
       aborted = true;
-      current2?.abort();
+      current3?.abort();
     }
   };
 }
@@ -589,20 +602,20 @@ function devTone(dev) {
 function shares(nodes, maxSlots = () => Infinity) {
   const total = nodes.reduce((s, n) => s + n.slots, 0);
   const expected = /* @__PURE__ */ new Map();
-  let open = nodes.filter((n) => n.state === "active" && n.capacity > 0);
-  let left = total;
-  while (open.length > 0) {
-    const sumCap = open.reduce((s, n) => s + n.capacity, 0);
-    const capped = open.filter((n) => left * n.capacity / sumCap > maxSlots(n));
+  let open2 = nodes.filter((n) => n.state === "active" && n.capacity > 0);
+  let left2 = total;
+  while (open2.length > 0) {
+    const sumCap = open2.reduce((s, n) => s + n.capacity, 0);
+    const capped = open2.filter((n) => left2 * n.capacity / sumCap > maxSlots(n));
     if (capped.length === 0) {
-      for (const n of open) expected.set(n.idx, left * n.capacity / sumCap);
+      for (const n of open2) expected.set(n.idx, left2 * n.capacity / sumCap);
       break;
     }
     for (const n of capped) {
       expected.set(n.idx, maxSlots(n));
-      left -= maxSlots(n);
+      left2 -= maxSlots(n);
     }
-    open = open.filter((n) => !capped.includes(n));
+    open2 = open2.filter((n) => !capped.includes(n));
   }
   const out = /* @__PURE__ */ new Map();
   for (const n of nodes) {
@@ -851,7 +864,7 @@ function bucketCard(s3, sh, scale) {
 }
 
 // internal/webui/src/integrity.ts
-function render3(root, r, history) {
+function render3(root, r, history2) {
   const v = r.volume;
   const tiles = h(
     "div",
@@ -862,13 +875,13 @@ function render3(root, r, history) {
     tile("Stale policy", v.stale_policy_chunks, `chunks not yet at ${v.k}+${v.m}`, "warn"),
     tile("Host skew", v.domain_skew, "chunks above the host cap", "warn")
   );
-  const last2 = history[history.length - 1];
+  const last2 = history2[history2.length - 1];
   const lastTone = last2 && last2.degraded + last2.pending > 0 ? "warn" : "";
   const spark = h(
     "div",
     null,
     sparkline(
-      history.map((s) => s.degraded + s.pending),
+      history2.map((s) => s.degraded + s.pending),
       lastTone
     ),
     h("div", { class: "small dim" }, "degraded + pending, last 10 min (this tab only)")
@@ -960,29 +973,29 @@ function pick(opts) {
     const confirm = h("button", { type: "button" }, "");
     const cancel = h("button", { type: "button" }, "Cancel");
     dlg.append(crumbs2, list, h("div", { class: "picker-actions" }, cancel, confirm));
-    const close = (v) => {
+    const close2 = (v) => {
       dlg.close();
       dlg.remove();
       resolve(v);
     };
-    cancel.addEventListener("click", () => close(null));
+    cancel.addEventListener("click", () => close2(null));
     confirm.addEventListener("click", () => {
-      if (!opts.disabled(cur)) close(cur);
+      if (!opts.disabled(cur)) close2(cur);
     });
     dlg.addEventListener("cancel", (ev) => {
       ev.preventDefault();
-      close(null);
+      close2(null);
     });
     dlg.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" && !(ev.target instanceof HTMLButtonElement)) {
         ev.preventDefault();
-        if (!opts.disabled(cur)) close(cur);
+        if (!opts.disabled(cur)) close2(cur);
       }
     });
     const draw = async () => {
       crumbs2.replaceChildren(h("a", { href: "#", onClick: (ev) => {
         ev.preventDefault();
-        go("/");
+        go2("/");
       } }, "/"));
       const parts = cur.split("/").filter(Boolean);
       let acc = "";
@@ -993,7 +1006,7 @@ function pick(opts) {
         if (i === parts.length - 1) crumbs2.append(h("span", null, p));
         else crumbs2.append(h("a", { href: "#", onClick: (ev) => {
           ev.preventDefault();
-          go(target);
+          go2(target);
         } }, p));
       });
       const reason = opts.disabled(cur);
@@ -1001,7 +1014,7 @@ function pick(opts) {
       confirm.disabled = reason !== null;
       confirm.title = reason ?? "";
       list.replaceChildren();
-      if (cur !== "/") list.append(h("li", { onClick: () => go(dirname(cur)) }, icon("folder"), ".."));
+      if (cur !== "/") list.append(h("li", { onClick: () => go2(dirname(cur)) }, icon("folder"), ".."));
       try {
         const r = await ls(cur);
         for (const e of r.entries) {
@@ -1009,14 +1022,14 @@ function pick(opts) {
           const path = cur === "/" ? "/" + e.name : cur + "/" + e.name;
           const why = opts.disabled(path);
           const li = h("li", why ? { "aria-disabled": "true", title: why } : null, icon("folder"), e.name);
-          if (!why) li.addEventListener("click", () => go(path));
+          if (!why) li.addEventListener("click", () => go2(path));
           list.append(li);
         }
       } catch (e) {
         list.append(h("li", { "aria-disabled": "true" }, "could not list: " + (e instanceof Error ? e.message : String(e))));
       }
     };
-    const go = (path) => {
+    const go2 = (path) => {
       cur = path;
       void draw();
     };
@@ -1138,10 +1151,10 @@ function offlineFor(m) {
   const d = daysAgo(m.last_seen);
   return d === "today" ? "offline" : "offline " + d.replace(" ago", "");
 }
-function asofMenu(ctx, view3, current2) {
+function asofMenu(ctx, view3, current3) {
   const body = h("div", { class: "menu-body", role: "radiogroup", "aria-label": "as of" });
-  const details2 = h("details", { class: "menu asof" }, h("summary", null, current2 ? current2.name : "Now"), body);
-  const go = (at) => {
+  const details2 = h("details", { class: "menu asof" }, h("summary", null, current3 ? current3.name : "Now"), body);
+  const go2 = (at) => {
     const next2 = { path: ctx.path, root: ctx.root };
     if (at !== void 0) next2.at = at;
     location.hash = view3 === "browse" ? browseHash(next2) : fileHash(next2);
@@ -1160,11 +1173,11 @@ function asofMenu(ctx, view3, current2) {
   };
   const fill = async () => {
     clear(body);
-    body.append(row2("Now", "the live volume", !current2, null, () => go()));
+    body.append(row2("Now", "the live volume", !current3, null, () => go2()));
     try {
       const c = await catalogue();
       clear(body);
-      body.append(row2("Now", "the live volume", !current2, null, () => go()));
+      body.append(row2("Now", "the live volume", !current3, null, () => go2()));
       let n = 0;
       for (const m of c.mirrors) {
         const mine = c.snapshots.filter((s) => s.mirror === m.name && s.state !== "syncing");
@@ -1174,7 +1187,7 @@ function asofMenu(ctx, view3, current2) {
           n++;
           const label = h("span", null, s.name);
           if (!s.auto) label.append(h("span", { class: "badge" }, "manual"));
-          body.append(row2(label, taken(s, c), current2?.id === s.id, m.online ? null : `${m.name} is offline: attach it to browse`, () => go(s.id)));
+          body.append(row2(label, taken(s, c), current3?.id === s.id, m.online ? null : `${m.name} is offline: attach it to browse`, () => go2(s.id)));
         }
       }
       const mirrors = new Set(c.snapshots.map((s) => s.mirror)).size;
@@ -1188,24 +1201,24 @@ function asofMenu(ctx, view3, current2) {
   });
   return details2;
 }
-function banner(ctx, ref, summary, folder3, back) {
+function banner(ctx, ref, summary, folder3, back2) {
   const name = ref?.name ?? (ctx.at !== void 0 ? `#${ctx.at}` : "");
   const text2 = h("span", null, "As of ", h("span", { class: "mono" }, name));
   if (ref) text2.append(" on ", h("span", { class: "mono" }, ref.mirror), ` \xB7 taken ${ago(ref.at)}`);
   text2.append(" \xB7 read-only" + (summary ? " \xB7 " + summary : ""));
   const actions = h("span", { class: "actions" });
   if (folder3 && ref) actions.append(h("button", { type: "button", onClick: () => void restoreFolder(ctx, ref) }, "Restore folder to\u2026"));
-  actions.append(h("button", { type: "button", onClick: () => location.hash = back }, "Back to now"));
+  actions.append(h("button", { type: "button", onClick: () => location.hash = back2 }, "Back to now"));
   return h("div", { class: "banner snapshot" }, text2, actions);
 }
-function offlineView(ctx, e, back) {
+function offlineView(ctx, e, back2) {
   const c = last();
   const sn = c?.snapshots.find((s) => s.id === ctx.at);
   const m = c?.mirrors.find((x) => x.name === sn?.mirror);
   const text2 = h("span", null, "As of ", h("span", { class: "mono" }, sn?.name ?? `#${ctx.at}`));
   if (sn) text2.append(" on ", h("span", { class: "mono" }, sn.mirror), ` \xB7 taken ${ago(sn.at)}`);
   const why = m ? h("div", { class: "empty" }, h("span", { class: "mono" }, m.name), ` is offline${m.last_seen ? ` (last seen ${ago(m.last_seen)} on ${m.host})` : ""}: attach it to browse this snapshot`) : h("div", { class: "empty" }, errText(e));
-  return [h("div", { class: "banner snapshot" }, text2, h("span", { class: "actions" }, h("button", { type: "button", onClick: () => location.hash = back }, "Back to now"))), why];
+  return [h("div", { class: "banner snapshot" }, text2, h("span", { class: "actions" }, h("button", { type: "button", onClick: () => location.hash = back2 }, "Back to now"))), why];
 }
 var isOffline = offline;
 async function restoreFolder(ctx, ref) {
@@ -1260,7 +1273,7 @@ function versionsPanel(path, onChange) {
     const held = vs.reduce((n, v) => n + v.snapshots.length, 0);
     const mirrors = [...new Set(vs.flatMap((v) => v.snapshots.map((s) => s.mirror)))];
     summary.textContent = `Versions (${vs.length} ${vs.length === 1 ? "content" : "contents"} \xB7 ${held} snapshots${mirrors.length ? " on " + mirrors.join(", ") : ""})`;
-    const current2 = vs.find((v) => v.current);
+    const current3 = vs.find((v) => v.current);
     const tbody = h("tbody");
     for (const v of vs) {
       const asof = h("td", { class: "asof" }, v.current ? "now" : range(v), h("span", { class: "small dim" }, v.current ? v.snapshots.length ? "also in " + holders(v) : "in no snapshot yet" : holders(v)));
@@ -1270,7 +1283,7 @@ function versionsPanel(path, onChange) {
       else if (first) {
         acts.append(
           h("button", { type: "button", onClick: () => location.hash = fileHash({ path, at: first.id }) }, "View"),
-          h("button", { type: "button", onClick: () => askRevert(first, !!current2 && current2.snapshots.length === 0) }, "Revert"),
+          h("button", { type: "button", onClick: () => askRevert(first, !!current3 && current3.snapshots.length === 0) }, "Revert"),
           h("button", { type: "button", onClick: () => void saveCopy(first) }, "Save a copy")
         );
       }
@@ -1423,7 +1436,7 @@ function section(c, onTaken, restores = []) {
     sec.append(h("table", { class: "snapshots" }, h("thead", null, h("tr", null, h("th", null, "name"), h("th", { class: "mirror" }, "mirror"), h("th", { class: "taken" }, "taken"), h("th", { class: "holds" }, "added"), h("th", { class: "acts" }))), tbody));
   } else sec.append(h("div", { class: "empty" }, "no snapshot yet: the first one copies the whole volume"));
   if (c.snapshots.length > PAGE) {
-    const go = (p) => () => {
+    const go2 = (p) => () => {
       page = p;
       onTaken();
     };
@@ -1433,9 +1446,9 @@ function section(c, onTaken, restores = []) {
       h(
         "div",
         { class: "pager" },
-        h("button", { type: "button", disabled: page === 0, onClick: go(page - 1) }, "Newer"),
+        h("button", { type: "button", disabled: page === 0, onClick: go2(page - 1) }, "Newer"),
         h("span", { class: "small dim" }, `${first}\u2013${lastRow} of ${c.snapshots.length}`),
-        h("button", { type: "button", disabled: page >= pages - 1, onClick: go(page + 1) }, "Older")
+        h("button", { type: "button", disabled: page >= pages - 1, onClick: go2(page + 1) }, "Older")
       )
     );
   }
@@ -1478,8 +1491,8 @@ function restoreCard(j, all) {
       break;
     }
     case "running": {
-      const left = j.rate > 0 ? ` \xB7 ${span((j.bytes_total - j.bytes_done) / j.rate)} left` : "";
-      el.append(barRow("bytes", bar(frac), `${so} \xB7 ${bytes(j.rate)}/s${j.yielding ? " \xB7 yielding to clients" : ""}${left}`));
+      const left2 = j.rate > 0 ? ` \xB7 ${span((j.bytes_total - j.bytes_done) / j.rate)} left` : "";
+      el.append(barRow("bytes", bar(frac), `${so} \xB7 ${bytes(j.rate)}/s${j.yielding ? " \xB7 yielding to clients" : ""}${left2}`));
       break;
     }
     case "waiting":
@@ -1539,15 +1552,15 @@ function takeDialog(onTaken) {
   return new Promise((resolve) => {
     const dlg = h("dialog", { class: "picker", "aria-label": "take a snapshot" });
     const name = h("input", { type: "text", placeholder: "name (optional: the UTC minute)", "aria-label": "snapshot name", maxlength: 64 });
-    const go = h("button", { type: "submit" }, "Take a snapshot");
+    const go2 = h("button", { type: "submit" }, "Take a snapshot");
     const cancel = h("button", { type: "button" }, "Cancel");
     const form = h("form", { class: "inline-form" }, name);
     dlg.append(
       h("div", { class: "small dim" }, "A manual snapshot is permanent: the schedule never thins it and no page removes it. This device's unsaved writes land first."),
       form,
-      h("div", { class: "picker-actions" }, cancel, go)
+      h("div", { class: "picker-actions" }, cancel, go2)
     );
-    const close = () => {
+    const close2 = () => {
       dlg.close();
       dlg.remove();
       resolve();
@@ -1558,18 +1571,18 @@ function takeDialog(onTaken) {
       takeSnapshot(n ? { name: n } : {}).then(
         (rows) => {
           toast(`snapshot ${rows[0]?.name ?? n} started on ${rows.map((r) => r.mirror).join(", ")}`, "ok");
-          close();
+          close2();
           void catalogue(true).then(onTaken, onTaken);
         },
         (e) => toast("snapshot: " + (offline(e) ? "no mirror is online" : errText(e)), "bad")
       );
     };
     form.addEventListener("submit", submit);
-    go.addEventListener("click", () => submit());
-    cancel.addEventListener("click", close);
+    go2.addEventListener("click", () => submit());
+    cancel.addEventListener("click", close2);
     dlg.addEventListener("cancel", (ev) => {
       ev.preventDefault();
-      close();
+      close2();
     });
     document.body.append(dlg);
     dlg.showModal();
@@ -1808,8 +1821,8 @@ function banner2(info) {
   return el;
 }
 function badge(purgeAt) {
-  const left = purgeAt ? daysUntil(purgeAt).replace(/^in /, "") : "";
-  return h("span", { class: "badge" }, left ? `deleted \xB7 ${left}` : "deleted");
+  const left2 = purgeAt ? daysUntil(purgeAt).replace(/^in /, "") : "";
+  return h("span", { class: "badge" }, left2 ? `deleted \xB7 ${left2}` : "deleted");
 }
 
 // internal/webui/src/thumbs.ts
@@ -2128,6 +2141,76 @@ function luma(c) {
   return { mean, spread: Math.sqrt(Math.max(0, sq / n - mean * mean)) };
 }
 
+// internal/webui/src/watch.ts
+var REPORT_EVERY = 15e3;
+var RESUME_MIN = 6e4;
+var LONG_TRACK = 20 * 6e4;
+function watchedAt(pos, dur) {
+  if (dur <= 0) return false;
+  return pos >= dur - Math.floor(dur / 10) || dur > 30 * 6e4 && pos >= dur - 5 * 6e4;
+}
+function resumeFrom(p) {
+  if (!p || p.watched || p.pos < RESUME_MIN || watchedAt(p.pos, p.dur)) return 0;
+  return p.pos / 1e3;
+}
+function left(p) {
+  const min = Math.max(0, Math.round((p.dur - p.pos) / 6e4));
+  return min >= 60 ? `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")} left` : `${min} min left`;
+}
+function hms(sec) {
+  const s = Math.max(0, Math.floor(sec));
+  const h2 = Math.floor(s / 3600);
+  const m = Math.floor(s % 3600 / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return h2 ? `${h2}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+function watch(el, path, opts) {
+  let last2 = 0;
+  let played = false;
+  let ended = false;
+  let seekTimer = 0;
+  const send = (final) => {
+    const dur = el.duration;
+    if (!opts.positions() || !Number.isFinite(dur) || dur <= 0) return;
+    last2 = Date.now();
+    void report({ path, pos: Math.round(el.currentTime * 1e3), dur: Math.round(dur * 1e3), final }, final).catch(() => void 0);
+  };
+  const onTime = () => {
+    if (!el.paused && Date.now() - last2 >= REPORT_EVERY) send(false);
+    if (opts.plays && !played && Number.isFinite(el.duration) && el.currentTime >= Math.min(el.duration / 2, 240)) {
+      played = true;
+      void report({ path, played: true }).catch(() => void 0);
+    }
+  };
+  const onPause = () => {
+    if (!el.ended) send(true);
+  };
+  const onSeeked = () => {
+    window.clearTimeout(seekTimer);
+    seekTimer = window.setTimeout(() => send(true), 1e3);
+  };
+  const onEnded = () => {
+    ended = true;
+    const dur = el.duration;
+    if (opts.positions() && Number.isFinite(dur) && dur > 0) void report({ path, pos: Math.round(dur * 1e3), dur: Math.round(dur * 1e3), final: true }, true).catch(() => void 0);
+  };
+  const onHide = () => send(true);
+  el.addEventListener("timeupdate", onTime);
+  el.addEventListener("pause", onPause);
+  el.addEventListener("seeked", onSeeked);
+  el.addEventListener("ended", onEnded);
+  window.addEventListener("pagehide", onHide);
+  return () => {
+    el.removeEventListener("timeupdate", onTime);
+    el.removeEventListener("pause", onPause);
+    el.removeEventListener("seeked", onSeeked);
+    el.removeEventListener("ended", onEnded);
+    window.removeEventListener("pagehide", onHide);
+    window.clearTimeout(seekTimer);
+    if (!ended && el.currentTime > 0) send(true);
+  };
+}
+
 // internal/webui/src/audio.ts
 var KEY2 = "tr.now";
 var Player = class {
@@ -2151,6 +2234,8 @@ var Player = class {
   coverSrc = "";
   // its picture as an object URL, once it came
   saveTimer = 0;
+  unwatch = null;
+  // ends the current track's playback reports (docs/13 §10c)
   current() {
     return this.index >= 0 ? this.queue[this.index] ?? null : null;
   }
@@ -2195,14 +2280,18 @@ var Player = class {
     this.mediaSession();
     this.notify();
   }
-  /** play starts the queue at index. */
-  play(tracks, index = 0) {
+  /** play starts the queue at index, at pos seconds into that track (a long track's resume point). */
+  play(tracks, index = 0, pos = 0) {
     if (!tracks.length) return;
     this.queue = tracks.slice();
     this.index = Math.max(0, Math.min(index, tracks.length - 1));
     this.seed = Date.now() % 2147483647 || 1;
     this.reshuffle();
-    this.load(this.index, true);
+    this.load(this.index, true, pos);
+  }
+  /** position is where the current track is and how long it is, in seconds. */
+  position() {
+    return { cur: this.a.currentTime || 0, dur: Number.isFinite(this.a.duration) ? this.a.duration : this.current()?.dur ?? 0 };
   }
   /** enqueue appends tracks; with nothing playing it starts them. */
   enqueue(tracks) {
@@ -2283,6 +2372,8 @@ var Player = class {
     this.notify();
   }
   clear() {
+    this.unwatch?.();
+    this.unwatch = null;
     this.a.pause();
     this.a.removeAttribute("src");
     this.a.load();
@@ -2316,6 +2407,8 @@ var Player = class {
   load(i, start, pos = 0) {
     const t = this.queue[i];
     if (!t) return;
+    this.unwatch?.();
+    this.unwatch = null;
     this.index = i;
     if (this.preloaded === i && this.b.src) {
       [this.a, this.b] = [this.b, this.a];
@@ -2325,6 +2418,8 @@ var Player = class {
     }
     this.preloaded = -1;
     this.b.removeAttribute("src");
+    const el = this.a;
+    this.unwatch = t.root === void 0 ? watch(el, t.path, { positions: () => el.duration * 1e3 > LONG_TRACK, plays: true }) : null;
     if (pos > 0) this.a.currentTime = pos;
     if (start) void this.a.play().catch(() => void 0);
     void this.describe(t);
@@ -2370,8 +2465,8 @@ var Player = class {
   onTime() {
     const c = this.current();
     if (!c) return;
-    const left = (this.a.duration || 0) - this.a.currentTime;
-    if (Number.isFinite(left) && left < 15 && this.repeat !== "one") {
+    const left2 = (this.a.duration || 0) - this.a.currentTime;
+    if (Number.isFinite(left2) && left2 < 15 && this.repeat !== "one") {
       const pos = this.order.indexOf(this.index);
       const n = pos + 1 < this.order.length ? this.order[pos + 1] : this.repeat === "all" ? this.order[0] : -1;
       if (n >= 0 && this.preloaded !== n) {
@@ -2489,28 +2584,30 @@ var Player = class {
     repeat.setAttribute("aria-pressed", "false");
     const shuffle = iconBtn("shuffle", "shuffle", () => this.toggleShuffle());
     shuffle.setAttribute("aria-pressed", "false");
-    const close = iconBtn("close", "close the player", () => this.clear());
-    close.classList.add("close");
+    const close2 = iconBtn("close", "close the player", () => this.clear());
+    close2.classList.add("close");
     const queueBtn = h("button", { type: "button", class: "queue-btn", "aria-pressed": "false", onClick: () => {
       this.bar?.classList.toggle("expanded");
       this.notify();
     } }, icon("queue_music"), h("span", null, "Queue"));
-    const bar2 = h(
+    const nowView = () => location.hash = "#/media/now";
+    cover.addEventListener("click", nowView);
+    const bar3 = h(
       "aside",
       { class: "nowbar", hidden: true },
       cover,
-      h("div", { class: "titles" }, title, sub),
+      h("div", { class: "titles", onClick: nowView }, title, sub),
       h("div", { class: "transport" }, prev, playBtn, next2),
       h("div", { class: "seek" }, seek, time),
       h("div", { class: "modes" }, repeat, shuffle),
       queueBtn,
-      close
+      close2
     );
     const list = h("ol");
     const summary = h("span", { class: "small dim" });
     const queue2 = h("div", { class: "queue", hidden: true }, h("div", { class: "toolbar" }, summary, h("span", { class: "spacer" }), h("button", { type: "button", onClick: () => this.clear() }, "Clear")), list);
-    document.body.append(bar2, queue2);
-    this.bar = bar2;
+    document.body.append(bar3, queue2);
+    this.bar = bar3;
     this.queueEl = queue2;
     this.els = { cover, title, sub, playBtn, seek, time, repeat, shuffle, queueBtn, list, summary };
   }
@@ -2713,7 +2810,7 @@ function render6(root, ctx) {
     const index = group.findIndex((s) => s.name === name);
     const prev = index > 0 ? group[index - 1] : void 0;
     const next2 = index >= 0 && index < group.length - 1 ? group[index + 1] : void 0;
-    const go = (e) => {
+    const go2 = (e) => {
       if (e) location.hash = fileHash({ path: join(dir, e.name), root: ctx.root, at: ctx.at });
     };
     if (kind2 === "video") {
@@ -2732,7 +2829,7 @@ function render6(root, ctx) {
         el.src = fileURL(path, false, src(ctx));
         media2 = { el, dir };
       }
-      el.onended = () => go(next2);
+      el.onended = () => go2(next2);
       viewer.append(el);
       if (mime && el.canPlayType(mime) === "") {
         section2.append(
@@ -2779,8 +2876,8 @@ function render6(root, ctx) {
         h(
           "div",
           { class: "controls" },
-          h("button", { type: "button", disabled: !prev, onClick: () => go(prev) }, icon("chevron_left"), "Previous"),
-          h("button", { type: "button", disabled: !next2, onClick: () => go(next2) }, "Next", icon("chevron_right")),
+          h("button", { type: "button", disabled: !prev, onClick: () => go2(prev) }, icon("chevron_left"), "Previous"),
+          h("button", { type: "button", disabled: !next2, onClick: () => go2(next2) }, "Next", icon("chevron_right")),
           h("span", { class: "track" }, `${label} ${index + 1} of ${group.length}` + (next2 ? ` \xB7 next: ${next2.name}` : ""))
         )
       );
@@ -2801,8 +2898,8 @@ function render6(root, ctx) {
       const t = ev.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "VIDEO" || t.tagName === "AUDIO")) return;
       if (kind2 === "audio") return;
-      if (ev.key === "ArrowRight") go(next2);
-      else if (ev.key === "ArrowLeft") go(prev);
+      if (ev.key === "ArrowRight") go2(next2);
+      else if (ev.key === "ArrowLeft") go2(prev);
       else if (ev.key === "Escape") location.hash = inTrash ? `#/trash/${ctx.root}` + encodeForHash(dir) : browseHash({ path: dir, at: ctx.at });
       else if (ev.key === " " && media2) {
         ev.preventDefault();
@@ -3035,9 +3132,9 @@ function menu(ctx) {
     });
     return lab;
   };
-  const libraryRow = (current2, why) => {
+  const libraryRow = (current3, why) => {
     const select = h("select", { "aria-label": "library kind" });
-    for (const word of ["none", "movies", "tv", "music", "roms"]) select.append(h("option", { value: word, selected: (current2 || "none") === word ? "" : void 0 }, word));
+    for (const word of ["none", "movies", "tv", "music", "roms"]) select.append(h("option", { value: word, selected: (current3 || "none") === word ? "" : void 0 }, word));
     const note = h("span", { class: "small dim" }, why ?? "the Media tab lists this folder as films, shows, music or games");
     const lab = h("label", { class: "menu-row library" }, h("span", null, "Library"), select, note);
     if (why) {
@@ -3049,7 +3146,7 @@ function menu(ctx) {
       setFlags(ctx.path, { library: select.value }).then(
         () => ctx.onChange(),
         (e) => {
-          select.value = current2 || "none";
+          select.value = current3 || "none";
           select.disabled = false;
           toast("Library: " + (e instanceof Error ? e.message : String(e)), "bad");
         }
@@ -3636,10 +3733,10 @@ function render8(root, ctx) {
   };
   const selbar = () => {
     const names = sel.names();
-    const bar2 = h("div", { class: "selbar" });
+    const bar3 = h("div", { class: "selbar" });
     if (!names.length) {
-      bar2.hidden = true;
-      return bar2;
+      bar3.hidden = true;
+      return bar3;
     }
     const chosen = entries.filter((e) => names.includes(e.name) && !e.deleted_at);
     const protectedBy = info.protected ? dir.split("/").filter(Boolean).pop() ?? "/" : chosen.some((e) => e.protected) ? chosen.find((e) => e.protected).name : null;
@@ -3660,12 +3757,12 @@ function render8(root, ctx) {
       rnBtn.disabled = true;
       rnBtn.title = inTrash ? "restore the folder first" : "select one entry to rename";
     }
-    bar2.append(h("span", { class: "count" }, `${chosen.length} selected`), delBtn, mvBtn, rnBtn);
+    bar3.append(h("span", { class: "count" }, `${chosen.length} selected`), delBtn, mvBtn, rnBtn);
     if (chosen.length && chosen.every((e) => e.type === "dir" || isAudioName(e.name))) {
-      bar2.append(action("play_arrow_fill", "Play", () => void playSelection(chosen, false)), action("playlist_add", "Add to queue", () => void playSelection(chosen, true)));
+      bar3.append(action("play_arrow_fill", "Play", () => void playSelection(chosen, false)), action("playlist_add", "Add to queue", () => void playSelection(chosen, true)));
     }
-    bar2.append(h("span", { class: "spacer" }), action("close", "Clear", () => sel.clear()));
-    return bar2;
+    bar3.append(h("span", { class: "spacer" }), action("close", "Clear", () => sel.clear()));
+    return bar3;
   };
   const playSelection = async (chosen, append2) => {
     const tracks = [];
@@ -3905,11 +4002,11 @@ function render9(root, query) {
   let disposed = false;
   let last2 = null;
   let lastAt = 0;
-  const go = (next2) => {
+  const go2 = (next2) => {
     location.hash = hash({ ...state, ...next2 });
   };
   const seg = h("span", { class: "seg", role: "group", "aria-label": "range" });
-  for (const [r] of RANGES) seg.append(h("button", { type: "button", "aria-pressed": String(state.range === r), onclick: () => go({ range: r, from: 0, to: 0 }) }, r));
+  for (const [r] of RANGES) seg.append(h("button", { type: "button", "aria-pressed": String(state.range === r), onclick: () => go2({ range: r, from: 0, to: 0 }) }, r));
   const form = h("form", { class: "inline-form range" });
   const customBtn = h("button", { type: "button", "aria-pressed": String(state.range === "custom"), onclick: () => form.toggleAttribute("hidden") }, "custom");
   seg.append(customBtn);
@@ -3928,7 +4025,7 @@ function render9(root, query) {
   form.append(h("label", null, "from ", fromIn), h("label", null, "to ", toIn), apply2, h("button", { type: "button", onclick: () => form.setAttribute("hidden", "") }, "Cancel"));
   form.addEventListener("submit", (e) => {
     e.preventDefault();
-    go({ range: "custom", from: Math.floor(Date.parse(fromIn.value) / 1e3), to: Math.floor(Date.parse(toIn.value) / 1e3) });
+    go2({ range: "custom", from: Math.floor(Date.parse(fromIn.value) / 1e3), to: Math.floor(Date.parse(toIn.value) / 1e3) });
   });
   form.addEventListener("keydown", (e) => {
     if (e.key === "Escape") form.setAttribute("hidden", "");
@@ -3944,10 +4041,10 @@ function render9(root, query) {
   const head = h("section", null, h("h2", null, "Stats", h("span", { class: "h-sub" }, "")), toolbar, form);
   root.append(head, charts);
   const sub = head.querySelector(".h-sub");
-  const drawMembers = (nodes, current2) => {
+  const drawMembers = (nodes, current3) => {
     clear(body);
     const row2 = (name, label, dot, note, m) => {
-      const el = h("div", { class: "menu-row" + (m?.web ? " link" : ""), "aria-current": String(name === current2) }, h("span", { class: "dot " + dot }), h("a", { href: hash({ ...state, node: name }) }, label), h("span", { class: "small dim" }, note));
+      const el = h("div", { class: "menu-row" + (m?.web ? " link" : ""), "aria-current": String(name === current3) }, h("span", { class: "dot " + dot }), h("a", { href: hash({ ...state, node: name }) }, label), h("span", { class: "small dim" }, note));
       if (m?.web) {
         const link = memberLink(m.name, `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, icon("open_in_new"));
         link.className = "menu-link";
@@ -4107,7 +4204,7 @@ function typing(t) {
 function wire3(form) {
   const input = form.querySelector("input");
   let timer = 0;
-  const go = () => {
+  const go2 = () => {
     const q = input.value.trim();
     if (!q) return;
     const on = location.hash.startsWith("#/search/");
@@ -4120,12 +4217,12 @@ function wire3(form) {
   form.addEventListener("submit", (ev) => {
     ev.preventDefault();
     clearTimeout(timer);
-    go();
+    go2();
   });
   input.addEventListener("input", () => {
     clearTimeout(timer);
     timer = window.setTimeout(() => {
-      if (input.value.trim().length >= 2) go();
+      if (input.value.trim().length >= 2) go2();
     }, 150);
   });
   input.addEventListener("keydown", (ev) => {
@@ -4189,13 +4286,13 @@ function render10(root, q, params) {
   root.append(section2);
   const scope = under || folder2;
   const sub = h("span", { class: "h-sub" }, "searching\u2026");
-  const bar2 = h("div", { class: "toolbar" }, h("h2", null, "Search", sub), h("span", { class: "spacer" }));
+  const bar3 = h("div", { class: "toolbar" }, h("h2", null, "Search", sub), h("span", { class: "spacer" }));
   if (scope !== "/") {
     const toggle = h("input", { type: "checkbox", checked: under !== "" });
     toggle.addEventListener("change", () => location.replace(searchHash(q, toggle.checked ? scope : "")));
-    bar2.append(h("label", { class: "toggle" }, toggle, " in ", h("code", null, scope), " only"));
+    bar3.append(h("label", { class: "toggle" }, toggle, " in ", h("code", null, scope), " only"));
   }
-  section2.append(bar2);
+  section2.append(bar3);
   const queue2 = [];
   let running2 = 0;
   const pump = () => {
@@ -4256,6 +4353,485 @@ function render10(root, q, params) {
   };
 }
 
+// internal/webui/src/viewer.ts
+function isOverlay(hash2) {
+  return /^#\/media\/(play|album)\/|^#\/media\/now$/.test(hash2.split("?")[0] ?? "");
+}
+function playHash(path) {
+  return "#/media/play" + encodePathForHash(path);
+}
+function albumHash(path) {
+  return "#/media/album" + encodePathForHash(path);
+}
+function searchHash2(field, value) {
+  return "#/media?q=" + encodeURIComponent(`${field}:"${value}"`);
+}
+var libs = null;
+function setLibraries(l) {
+  libs = l;
+}
+async function libName(p) {
+  if (!libs) {
+    try {
+      libs = (await media()).libs;
+    } catch {
+      libs = [];
+    }
+  }
+  const lib = libs.filter((l) => p === l.path || p.startsWith(l.path + "/")).sort((a, b) => b.path.length - a.path.length)[0];
+  const n = lib ? basename(lib.path) : "Media";
+  return n.charAt(0).toUpperCase() + n.slice(1);
+}
+var current2 = null;
+var backTo = "#/media";
+function open(hash2, under) {
+  if (current2?.hash === hash2) return;
+  current2?.close();
+  current2 = null;
+  backTo = under;
+  const where = (hash2.split("?")[0] ?? "").replace(/^#\/media\//, "");
+  const slash = where.indexOf("/");
+  const kind2 = slash < 0 ? where : where.slice(0, slash);
+  const path = decodeHashPath(slash < 0 ? "" : where.slice(slash));
+  const el = h("div", { class: "mviewer theme-dark", role: "dialog", "aria-modal": "true" });
+  document.body.append(el);
+  document.body.classList.add("modal-open");
+  const o = { hash: hash2, el, close: () => void 0 };
+  current2 = o;
+  const onKey = (ev) => {
+    if (ev.key === "Escape" && !document.fullscreenElement) back();
+  };
+  document.addEventListener("keydown", onKey);
+  let inner = () => void 0;
+  o.close = () => {
+    inner();
+    document.removeEventListener("keydown", onKey);
+    if (document.fullscreenElement && el.contains(document.fullscreenElement)) void document.exitFullscreen().catch(() => void 0);
+    el.remove();
+    document.body.classList.remove("modal-open", "now-open");
+  };
+  if (kind2 === "play") inner = video(el, path);
+  else if (kind2 === "album") inner = album(el, path);
+  else inner = nowPlaying(el);
+}
+function close() {
+  current2?.close();
+  current2 = null;
+}
+function back() {
+  location.hash = backTo;
+}
+function iconBtn2(name, label, onClick, cls = "") {
+  return h("button", { type: "button", class: "icon-btn" + (cls ? " " + cls : ""), "aria-label": label, title: label, onClick }, icon(name));
+}
+function bar2(label, title, extra) {
+  const backLink = h("a", { class: "back", href: backTo }, icon("arrow_back"), "Back");
+  void label.then((n) => backLink.replaceChildren(icon("arrow_back"), n));
+  return h("div", { class: "mbar" }, backLink, h("span", { class: "mtitle" }, title), extra ?? iconBtn2("close", "close", back));
+}
+function prog(p) {
+  const el = h("span", { class: "prog" });
+  if (p && p.dur > 0) el.style.setProperty("--p", `${Math.min(100, p.pos / p.dur * 100).toFixed(1)}%`);
+  return el;
+}
+function links(it) {
+  const out = [];
+  if (it.genres?.length) out.push(h("div", { class: "mlinks" }, ...it.genres.map((g) => h("a", { class: "genre", href: searchHash2("genre", g) }, g.toLowerCase()))));
+  const dirs = it.directors ?? 0;
+  if (it.people?.length)
+    out.push(
+      h(
+        "div",
+        { class: "mlinks" },
+        ...it.people.map((p, i) => i < dirs ? h("a", { class: "person", href: searchHash2("director", p) }, p, h("span", { class: "small dim" }, "director")) : h("a", { class: "person", href: searchHash2("actor", p) }, p))
+      )
+    );
+  return out;
+}
+function episodeNo(e) {
+  const two = (n) => String(n).padStart(2, "0");
+  return `S${two(e.season ?? 0)}E${two(e.episode ?? 0)}`;
+}
+function minutes(min) {
+  if (!min) return "";
+  return min >= 60 ? `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")}` : `${min} min`;
+}
+function video(root, path) {
+  let disposed = false;
+  let unwatch = null;
+  const v = h("video", { controls: true, playsinline: true, preload: "metadata" });
+  const screen = h("div", { class: "mscreen" }, v);
+  let idle = 0;
+  const wake = () => {
+    screen.classList.remove("idle");
+    window.clearTimeout(idle);
+    idle = window.setTimeout(() => screen.classList.add("idle"), 3e3);
+  };
+  screen.addEventListener("pointermove", wake);
+  const onFs = () => {
+    screen.classList.toggle("fs", document.fullscreenElement === screen);
+    wake();
+  };
+  document.addEventListener("fullscreenchange", onFs);
+  const fullscreen = () => {
+    if (screen.requestFullscreen) void screen.requestFullscreen().catch(() => void 0);
+    else v.webkitEnterFullscreen?.();
+  };
+  const fsName = h("span", { class: "fs-name" });
+  const fsTop = h("div", { class: "fs-top" }, iconBtn2("arrow_back", "leave fullscreen", () => void document.exitFullscreen().catch(() => void 0)), fsName);
+  screen.append(fsTop, iconBtn2("fullscreen", "fullscreen", fullscreen, "fs-btn"));
+  const facts = h("details", { class: "mfacts" });
+  try {
+    facts.open = localStorage.getItem("tr.viewer.facts") === "1";
+  } catch {
+  }
+  facts.addEventListener("toggle", () => {
+    try {
+      localStorage.setItem("tr.viewer.facts", facts.open ? "1" : "0");
+    } catch {
+    }
+  });
+  const body = h("div", { class: "mbody" }, screen, facts);
+  const backdrop = h("img", { class: "mbackdrop", alt: "" });
+  backdrop.addEventListener("error", () => backdrop.remove());
+  const title = h("span");
+  root.append(backdrop, bar2(libName(path), "", void 0), body);
+  root.querySelector(".mtitle")?.append(title);
+  player.pause();
+  let eps = [];
+  let item = null;
+  let cur = null;
+  let upnext = null;
+  let cancelled = false;
+  let prompt = null;
+  const nextEp = () => cur?.ep ? eps[eps.findIndex((e) => e.path === cur.ep.path) + 1] : void 0;
+  const prevEp = () => cur?.ep ? eps[eps.findIndex((e) => e.path === cur.ep.path) - 1] : void 0;
+  const ask = (...kids) => {
+    prompt?.remove();
+    prompt = h("div", { class: "mprompt" }, ...kids);
+    screen.append(prompt);
+  };
+  const dismiss = () => {
+    prompt?.remove();
+    prompt = null;
+  };
+  const start = (from) => {
+    dismiss();
+    v.currentTime = from;
+    fullscreen();
+    void v.play().catch(() => ask(h("span", { class: "mq" }, cur?.ep?.title ?? item?.title ?? ""), h("span", { class: "acts" }, h("button", { type: "button", class: "primary", onClick: () => start(v.currentTime) }, icon("play_arrow_fill"), "Play"))));
+  };
+  const drawFacts = (it, ep) => {
+    clear(facts);
+    const sum = h("summary");
+    if (ep) {
+      sum.append(h("h1", null, ep.title), h("span", null, it.title), h("span", null, episodeNo(ep)));
+      if (ep.runtime) sum.append(h("span", null, minutes(ep.runtime)));
+      if (ep.aired) sum.append(h("span", null, "aired " + ep.aired));
+    } else {
+      sum.append(h("h1", null, it.title));
+      for (const f of [it.year ? String(it.year) : "", minutes(it.runtime), it.rating ? `\u2605 ${it.rating}` : "", it.mpaa ?? ""]) if (f) sum.append(h("span", null, f));
+    }
+    const more = h("div", { class: "mmore" });
+    const plot = ep?.plot ?? it.plot;
+    if (plot) more.append(h("p", { class: "plot" }, plot));
+    more.append(...links(ep?.people?.length ? { ...it, people: ep.people, directors: ep.directors } : it));
+    const file = cur?.video ?? "";
+    more.append(h("div", { class: "small dim" }, file, " \xB7 ", h("a", { href: "#/browse" + encodePathForHash(dirname(file)) }, "open folder")));
+    facts.append(sum, more);
+    fsName.replaceChildren(ep ? it.title : it.title, h("span", { class: "small" }, ep ? `${episodeNo(ep)} \xB7 ${ep.title}` : [it.year, minutes(it.runtime)].filter(Boolean).join(" \xB7 ")));
+    title.textContent = ep ? `${it.title} \xB7 ${episodeNo(ep)}` : [it.title, it.year].filter(Boolean).join(" \xB7 ");
+  };
+  const episodesUI = h("div");
+  const drawEpisodes = () => {
+    clear(episodesUI);
+    const ep = cur?.ep;
+    if (!item || !ep) return;
+    const next2 = nextEp();
+    const prev = prevEp();
+    if (next2 || prev) {
+      const nimg = h("img", { alt: "" });
+      if (next2) nimg.src = thumbURL(next2.thumb || next2.path);
+      nimg.addEventListener("error", () => nimg.style.visibility = "hidden");
+      const nacts = h("span", { class: "nacts" });
+      if (prev) nacts.append(iconBtn2("skip_previous_fill", "previous episode", () => switchTo(prev, 0)));
+      if (next2) nacts.append(h("button", { type: "button", class: "primary", onClick: () => switchTo(next2, 0) }, icon("skip_next_fill"), "Next"));
+      episodesUI.append(h("div", { class: "mnext" }, nimg, h("span", { class: "nname" }, h("span", null, next2 ? `Next \xB7 ${episodeNo(next2)}` : "Last episode"), h("span", { class: "small" }, next2 ? [next2.title, minutes(next2.runtime)].filter(Boolean).join(" \xB7 ") : "")), nacts));
+    }
+    const season = (item.seasons ?? []).find((s) => s.episodes.some((e) => e.path === ep.path));
+    if (!season) return;
+    const watched = season.episodes.filter((e) => e.progress?.watched).length;
+    const tbody = h("tbody");
+    for (const e of season.episodes) {
+      const t = h("td", { class: "title" });
+      if (e.progress?.watched) t.append(icon("check"));
+      t.append(e.title);
+      if (e.progress && !e.progress.watched && e.progress.pos > 0) t.append(prog(e.progress));
+      const img = h("img", { alt: "", loading: "lazy", src: thumbURL(e.thumb || e.path) });
+      img.addEventListener("error", () => img.style.visibility = "hidden");
+      const row2 = h("tr", { class: [e.path === ep.path ? "playing" : "", e.progress?.watched ? "watched" : ""].filter(Boolean).join(" ") }, h("td", { class: "no" }, episodeNo(e)), h("td", { class: "thumb" }, img), t, h("td", { class: "dur" }, minutes(e.runtime)));
+      row2.addEventListener("click", () => switchTo(e, resumeFrom(e.progress)));
+      tbody.append(row2);
+    }
+    episodesUI.append(h("details", { class: "mfold" }, h("summary", null, "Episodes", h("span", { class: "small" }, `${season.title} \xB7 ${watched} of ${season.episodes.length} watched`)), h("table", { class: "episodes" }, tbody)));
+  };
+  body.append(episodesUI);
+  const load2 = (file, ep, resume, autoplay) => {
+    unwatch?.();
+    cancelled = false;
+    upnext?.remove();
+    upnext = null;
+    cur = { path: ep?.path ?? path, video: file, ep };
+    v.src = fileURL(file);
+    unwatch = watch(v, file, { positions: () => true, plays: false });
+    drawFacts(item, ep);
+    drawEpisodes();
+    if (resume > 0) {
+      v.currentTime = resume;
+      ask(
+        h("span", { class: "mq" }, `Resume from ${hms(resume)}?`),
+        prog(ep?.progress ?? item?.progress),
+        h("span", { class: "acts" }, h("button", { type: "button", class: "primary", onClick: () => start(resume) }, icon("play_arrow_fill"), "Resume"), h("button", { type: "button", onClick: () => start(0) }, icon("replay"), "Start from the beginning"))
+      );
+      prompt?.querySelector("button.primary")?.focus();
+    } else if (autoplay) start(0);
+  };
+  const switchTo = (e, resume) => {
+    history.replaceState(null, "", playHash(e.path));
+    if (current2) current2.hash = playHash(e.path);
+    load2(e.path, e, resume, true);
+  };
+  v.addEventListener("timeupdate", () => {
+    const next2 = nextEp();
+    if (!next2 || cancelled || upnext || !Number.isFinite(v.duration) || v.duration - v.currentTime > 30) return;
+    let n = 10;
+    const label = h("span", { class: "ulabel" }, `Up next in ${n} s`);
+    const nimg = h("img", { alt: "", src: thumbURL(next2.thumb || next2.path) });
+    upnext = h("div", { class: "upnext" }, nimg, label, h("span", { class: "uname" }, `${episodeNo(next2)} \xB7 ${next2.title}`), h("span", { class: "uacts" }, h("button", { type: "button", class: "primary", onClick: () => switchTo(next2, 0) }, icon("play_arrow_fill"), "Play now"), h("button", { type: "button", onClick: () => {
+      cancelled = true;
+      upnext?.remove();
+    } }, "Cancel")));
+    screen.append(upnext);
+    const tick = window.setInterval(() => {
+      if (disposed || cancelled || !upnext?.isConnected) return window.clearInterval(tick);
+      if (--n <= 0) {
+        window.clearInterval(tick);
+        switchTo(next2, 0);
+        return;
+      }
+      label.textContent = `Up next in ${n} s`;
+    }, 1e3);
+  });
+  v.addEventListener("ended", () => {
+    const next2 = nextEp();
+    if (next2 && !cancelled) return switchTo(next2, 0);
+    if (document.fullscreenElement === screen) void document.exitFullscreen().catch(() => void 0);
+    const backLabel = item?.kind === "show" ? `Back to ${item.title}` : "Back";
+    ask(icon("check"), h("span", { class: "mq" }, "Watched"), h("span", { class: "acts" }, h("button", { type: "button", onClick: () => start(0) }, icon("replay"), "Play again"), h("a", { class: "btn primary", href: backTo }, backLabel)));
+  });
+  v.addEventListener("error", () => {
+    const file = cur?.video ?? "";
+    ask(icon("error"), h("span", { class: "mq" }, "This browser cannot play this file"), h("span", { class: "small" }, basename(file)), h("span", { class: "acts" }, h("a", { class: "btn", href: fileURL(file, true) }, "Download")));
+  });
+  mediaItem(path).then(
+    (it) => {
+      if (disposed) return;
+      item = it;
+      if (it.fanart || it.poster) backdrop.src = fileURL(it.fanart || it.poster);
+      else backdrop.remove();
+      if (it.kind === "show") {
+        eps = (it.seasons ?? []).filter((s) => s.n > 0).flatMap((s) => s.episodes);
+        const all = (it.seasons ?? []).flatMap((s) => s.episodes);
+        const ep = all.find((e) => e.path === path) ?? all.find((e) => e.path === it.next) ?? eps[0];
+        if (!ep) return ask(h("span", { class: "mq" }, "No episode to play"));
+        load2(ep.path, ep, resumeFrom(ep.progress), true);
+      } else {
+        const file = it.video ?? path;
+        load2(file, void 0, resumeFrom(it.progress), true);
+      }
+    },
+    (e) => ask(h("span", { class: "mq" }, "could not open: " + (e instanceof Error ? e.message : String(e))))
+  );
+  return () => {
+    disposed = true;
+    unwatch?.();
+    document.removeEventListener("fullscreenchange", onFs);
+    window.clearTimeout(idle);
+    v.pause();
+    v.removeAttribute("src");
+    v.load();
+  };
+}
+function album(root, path) {
+  let disposed = false;
+  const backdrop = h("img", { class: "mbackdrop", alt: "", src: thumbURL(path) });
+  backdrop.addEventListener("error", () => backdrop.remove());
+  const cover = h("img", { class: "cover", alt: "", src: thumbURL(path) });
+  cover.addEventListener("error", () => cover.style.visibility = "hidden");
+  const head = h("div", null, h("h1", null, basename(path)));
+  const tbody = h("tbody");
+  const body = h("div", { class: "mbody" }, h("div", { class: "malbum" }, cover, head), h("table", { class: "tracks" }, tbody));
+  root.append(backdrop, bar2(libName(path), ""), body);
+  let unsub = () => void 0;
+  mediaItem(path).then(
+    (it) => {
+      if (disposed) return;
+      const names = (it.tracks ?? []).slice().sort((a, b) => trackNo(a) - trackNo(b) || a.localeCompare(b, void 0, { numeric: true }));
+      const tracks = names.map((n) => ({ path: path + "/" + n }));
+      const tp = new Map((it.track_play ?? []).map((t) => [t.name, t]));
+      const durs = /* @__PURE__ */ new Map();
+      const titles = /* @__PURE__ */ new Map();
+      const rows = [];
+      const first = names.findIndex((n) => resumeFrom(tp.get(n)?.progress) > 0);
+      const playAt = (i) => player.play(tracks, i, resumeFrom(tp.get(names[i])?.progress));
+      const meta2 = h("div", { class: "meta" });
+      const drawMeta = () => {
+        const parts = [it.year ? String(it.year) : "", (it.genres ?? []).join(" \xB7 ").toLowerCase(), `${names.length} ${names.length === 1 ? "track" : "tracks"}` + (durs.size === names.length && names.length ? ` \xB7 ${mmss([...durs.values()].reduce((s, d) => s + d, 0))}` : ""), it.plays ? `played ${it.plays} ${it.plays === 1 ? "time" : "times"}` : ""];
+        meta2.replaceChildren(...parts.filter(Boolean).map((p) => h("span", null, p)));
+      };
+      const actions = h(
+        "div",
+        { class: "actions" },
+        h("button", { type: "button", class: "primary", onClick: () => playAt(first >= 0 ? first : 0) }, icon("play_arrow_fill"), first >= 0 ? `Resume ${titles.get(first) ?? names[first].replace(/\.[^.]+$/, "")} \xB7 ${hms(resumeFrom(tp.get(names[first])?.progress))}` : "Play"),
+        h("button", { type: "button", onClick: () => {
+          if (!player.shuffle) player.toggleShuffle();
+          player.play(tracks, Math.floor(Math.random() * tracks.length));
+        } }, icon("shuffle"), "Shuffle"),
+        h("a", { class: "btn", href: "#/browse" + encodePathForHash(path) }, "Open folder")
+      );
+      const artist = it.artist ? h("a", { class: "artist", href: searchHash2("artist", it.artist) }, it.artist) : h("span", { class: "artist" });
+      head.replaceChildren(h("h1", null, it.title), artist, meta2, actions);
+      if (it.plot) body.insertBefore(h("details", { class: "mfacts" }, h("summary", null, h("span", null, `${it.artist ?? it.title} \xB7 about`)), h("div", { class: "mmore" }, h("p", { class: "plot" }, it.plot))), body.lastElementChild);
+      const drawRow = (i) => {
+        const n = names[i];
+        const t = tp.get(n);
+        const playing = player.isCurrent(tracks[i].path);
+        const tc = h("td", { class: "title" }, titles.get(i) ?? n.replace(/\.[^.]+$/, ""));
+        const from = resumeFrom(t?.progress);
+        if (from > 0) tc.append(h("span", { class: "small dim" }, ` Resume from ${hms(from)}`), prog(t?.progress));
+        rows[i].className = playing ? "playing" : "";
+        rows[i].replaceChildren(h("td", { class: "no" }, playing ? icon("equalizer") : String(trackNo(n) || i + 1)), tc, h("td", { class: "plays" }, t?.plays ? String(t.plays) : ""), h("td", { class: "dur" }, mmss(durs.get(i))));
+      };
+      names.forEach((_, i) => {
+        const tr = h("tr");
+        tr.addEventListener("click", () => playAt(i));
+        rows.push(tr);
+        tbody.append(tr);
+        drawRow(i);
+      });
+      drawMeta();
+      unsub = player.subscribe(() => rows.forEach((_, i) => drawRow(i)));
+      void (async () => {
+        for (let i = 0; i < names.length && !disposed; i++) {
+          try {
+            const g = await tags(tracks[i].path);
+            if (g.title) titles.set(i, g.title);
+            tracks[i].title = g.title || void 0;
+            tracks[i].artist = g.artist;
+            tracks[i].album = g.album;
+          } catch {
+          }
+          const d = await duration(fileURL(tracks[i].path));
+          if (d !== void 0) {
+            durs.set(i, d);
+            tracks[i].dur = d;
+          }
+          if (!disposed) {
+            drawRow(i);
+            drawMeta();
+          }
+        }
+      })();
+    },
+    (e) => head.append(h("p", { class: "plot" }, "could not open: " + (e instanceof Error ? e.message : String(e))))
+  );
+  return () => {
+    disposed = true;
+    unsub();
+  };
+}
+function nowPlaying(root) {
+  document.body.classList.add("now-open");
+  const cover = h("img", { class: "cover", alt: "" });
+  cover.addEventListener("error", () => cover.style.visibility = "hidden");
+  const backdrop = h("img", { class: "mbackdrop", alt: "" });
+  const ntitle = h("div", { class: "ntitle" });
+  const nsub = h("div", { class: "nsub" });
+  const cur = h("span", { class: "time" }, "0:00");
+  const end = h("span", { class: "time" }, "\u2014");
+  const seek = h("input", { type: "range", min: 0, max: 0, value: 0, "aria-label": "seek" });
+  seek.addEventListener("input", () => player.seek(Number(seek.value)));
+  const playBtn = iconBtn2("play_arrow_fill", "play", () => player.toggle(), "big");
+  const shuffle = iconBtn2("shuffle", "shuffle", () => player.toggleShuffle());
+  const repeat = iconBtn2("repeat", "repeat", () => player.cycleRepeat());
+  const queue2 = h("ol");
+  const queueSum = h("span", { class: "small" });
+  const albumLink = h("a", { class: "btn" }, "Album");
+  const label = h("span", { class: "mtitle" });
+  const mbar = h("div", { class: "mbar" }, h("a", { class: "back", href: backTo }, icon("arrow_back"), "Back"), label, albumLink);
+  root.append(
+    backdrop,
+    mbar,
+    h(
+      "div",
+      { class: "mbody" },
+      h(
+        "div",
+        { class: "mnow" },
+        cover,
+        h("div", null, ntitle, nsub),
+        h("div", { class: "seek" }, cur, seek, end),
+        h("div", { class: "transport" }, iconBtn2("skip_previous_fill", "previous", () => player.prev()), playBtn, iconBtn2("skip_next_fill", "next", () => player.next())),
+        h("div", { class: "modes" }, shuffle, repeat),
+        h("details", { class: "mfold" }, h("summary", null, "Up next", queueSum), queue2)
+      )
+    )
+  );
+  let drawnFor = "";
+  const draw = () => {
+    const t = player.current();
+    if (!t) {
+      back();
+      return;
+    }
+    if (drawnFor !== t.path) {
+      drawnFor = t.path;
+      cover.style.visibility = "";
+      cover.src = backdrop.src = thumbURL(t.path, t.root);
+      albumLink.setAttribute("href", albumHash(dirname(t.path)));
+      void libName(t.path).then((n) => mbar.querySelector("a.back")?.replaceChildren(icon("arrow_back"), n));
+    }
+    ntitle.textContent = t.title ?? basename(t.path);
+    nsub.textContent = [t.artist, t.album].filter(Boolean).join(" \xB7 ");
+    label.textContent = t.album ? `playing from ${t.album}` : "";
+    playBtn.setAttribute("aria-label", player.playing ? "pause" : "play");
+    playBtn.replaceChildren(icon(player.playing ? "pause_fill" : "play_arrow_fill"));
+    shuffle.setAttribute("aria-pressed", String(player.shuffle));
+    repeat.setAttribute("aria-pressed", String(player.repeat !== "off"));
+    const rest = player.queue.slice(player.index + 1);
+    queueSum.textContent = `${rest.length} ${rest.length === 1 ? "track" : "tracks"}`;
+    queue2.replaceChildren(...rest.map((q) => h("li", null, q.title ?? basename(q.path))));
+  };
+  const tick = window.setInterval(() => {
+    const { cur: c, dur } = player.position();
+    if (document.activeElement !== seek) {
+      seek.max = String(Math.round(dur));
+      seek.value = String(Math.round(c));
+    }
+    cur.textContent = mmss(c);
+    end.textContent = mmss(dur);
+  }, 500);
+  const unsub = player.subscribe(draw);
+  draw();
+  return () => {
+    unsub();
+    window.clearInterval(tick);
+  };
+}
+function markWatched(paths, watched) {
+  return report({ paths, action: watched ? "watched" : "unwatched" });
+}
+
 // internal/webui/src/media.ts
 var NOUN = { movies: ["film", "films"], tv: ["show", "shows"], music: ["album", "albums"], roms: ["platform", "platforms"] };
 var WARN_FLAGS = /* @__PURE__ */ new Set(["proto", "hack", "beta", "demo", "bad", "unl", "pirate", "dlc", "update"]);
@@ -4282,7 +4858,12 @@ function duration2(min) {
   return min >= 60 ? `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")}` : `${min} min`;
 }
 function itemHash(it) {
-  return it.kind === "album" ? browseHash({ path: it.path }) : "#/media/item" + encodePathForHash(it.path);
+  return it.kind === "album" ? albumHash(it.path) : "#/media/item" + encodePathForHash(it.path);
+}
+function progEl(p) {
+  const el = h("span", { class: "prog" });
+  if (p && p.dur > 0) el.style.setProperty("--p", `${Math.min(100, p.pos / p.dur * 100).toFixed(1)}%`);
+  return el;
 }
 function art(it) {
   if (it.poster) return thumbURL(it.poster);
@@ -4300,6 +4881,7 @@ function meta(it) {
   return [it.year ? String(it.year) : "", it.kind === "movie" && !it.runtime && !it.plot ? "no sidecar" : ""];
 }
 function fact(it) {
+  if (it.kind === "album" && it.plays) return `${it.plays} ${it.plays === 1 ? "play" : "plays"}`;
   if (it.kind === "movie" && it.runtime) return duration2(it.runtime);
   if (it.kind === "show" && it.children) return `${it.children} ${it.children === 1 ? "season" : "seasons"}`;
   if (it.kind === "platform") return `${it.children ?? 0} ${it.children === 1 ? "game" : "games"}`;
@@ -4327,6 +4909,8 @@ function posterTile(it) {
     box.append(img);
   } else missing();
   if (chip && !box.contains(chip)) box.append(chip);
+  if (it.progress?.watched || it.watched) box.append(h("span", { class: "ov tr" }, icon("check")));
+  else if (it.progress && it.progress.pos > 0) box.append(progEl(it.progress));
   if (veiled) {
     a.addEventListener("click", (ev) => {
       if (!a.classList.contains("nsfw")) return;
@@ -4359,10 +4943,10 @@ function librarySection(lib) {
   fold2.open = !stored2(key);
   const section2 = h("section", { class: "lib " + lib.kind }, fold2);
   const grid = h("div", { class: "posters" });
-  const sorts = ["title", "year", "added"];
+  const sorts = lib.kind === "music" ? ["title", "year", "added", "played"] : ["title", "year", "added"];
   let sort = session.get(`tr.media.sort.${lib.path}`, "title");
   let items = [];
-  const buttons = sorts.map((s) => h("button", { type: "button", "aria-pressed": String(s === sort) }, s[0].toUpperCase() + s.slice(1)));
+  const buttons = sorts.map((s) => h("button", { type: "button", "aria-pressed": String(s === sort) }, s === "played" ? "Most played" : s[0].toUpperCase() + s.slice(1)));
   const draw = () => {
     clear(grid);
     for (const it of items) grid.append(posterTile(it));
@@ -4390,7 +4974,7 @@ function librarySection(lib) {
   );
   fold2.append(h("div", { class: "toolbar" }, h("span", { class: "seg", role: "group", "aria-label": "sort" }, ...buttons)), grid);
   let loaded = false;
-  const open = () => {
+  const open2 = () => {
     if (fold2.open && !loaded) {
       loaded = true;
       load2();
@@ -4398,14 +4982,201 @@ function librarySection(lib) {
   };
   fold2.addEventListener("toggle", () => {
     remember(key, !fold2.open);
-    open();
+    open2();
   });
-  open();
+  open2();
   return section2;
 }
-function overview(root) {
+function splitQuery(q) {
+  const chips2 = [];
+  const words = [];
+  for (const m of q.matchAll(/([a-z]+):"([^"]*)"|([a-z]+):(\S+)|(\S+)/gi)) {
+    if (m[1]) chips2.push({ field: m[1].toLowerCase(), value: m[2] });
+    else if (m[3]) chips2.push({ field: m[3].toLowerCase(), value: m[4] });
+    else words.push(m[5]);
+  }
+  return { chips: chips2, words: words.join(" ") };
+}
+function joinQuery(chips2, words) {
+  return [...chips2.map((c) => /\s/.test(c.value) || c.field !== "year" ? `${c.field}:"${c.value}"` : `${c.field}:${c.value}`), words.trim()].filter(Boolean).join(" ");
+}
+function go(q) {
+  location.hash = "#/media" + (q ? "?q=" + encodeURIComponent(q) : "");
+}
+function searchField(q) {
+  const { chips: chips2, words } = splitQuery(q);
+  const input = h("input", { type: "search", value: words, placeholder: "title, actor, director, genre, year\u2026", "aria-label": "search the media", autocomplete: "off" });
+  const field = h("label", { class: "mfield" }, icon("search"));
+  chips2.forEach((c, i) => {
+    field.append(h("button", { type: "button", class: "qchip", "aria-label": `remove ${c.field} ${c.value}`, onClick: (ev) => {
+      ev.preventDefault();
+      go(joinQuery(chips2.filter((_, j) => j !== i), input.value));
+    } }, h("b", null, c.field), c.value, icon("close")));
+  });
+  field.append(input);
+  const list = h("ul", { class: "msuggest", role: "listbox", hidden: true });
+  const box = h("div", { class: "msearch" }, field, list);
+  let opts = [];
+  let sel = -1;
+  let timer = 0;
+  let asked = "";
+  const mark = () => opts.forEach((o, i) => o.li.setAttribute("aria-selected", String(i === sel)));
+  const pick2 = (c) => {
+    const rest = input.value.trim().split(/\s+/).slice(0, -1).join(" ");
+    go(joinQuery([...chips2, c], rest));
+  };
+  const ask = () => {
+    const last2 = input.value.trim().split(/\s+/).pop() ?? "";
+    const query = joinQuery(chips2, input.value);
+    if (last2.length < 2 || /:/.test(last2)) {
+      list.hidden = true;
+      return;
+    }
+    asked = query;
+    suggest(query).then(
+      (res) => {
+        if (asked !== query) return;
+        clear(list);
+        opts = [];
+        sel = -1;
+        const lw = last2.toLowerCase();
+        for (const g of res.groups) {
+          list.append(h("li", { class: "mgroup" }, g.field.charAt(0).toUpperCase() + g.field.slice(1) + "s"));
+          for (const v of g.values) {
+            const at = v.value.toLowerCase().indexOf(lw);
+            const label = at >= 0 ? [v.value.slice(0, at), h("mark", null, v.value.slice(at, at + lw.length)), v.value.slice(at + lw.length)] : [v.value];
+            const counts = Object.entries(v.counts).map(([k, n]) => `${n} ${k === "movie" ? n === 1 ? "film" : "films" : n === 1 ? k : k + "s"}`).join(" \xB7 ");
+            const li = h("li", { class: "mopt", role: "option", "aria-selected": "false" }, h("span", { class: "mkind" }, g.field), h("span", null, ...label), h("span", { class: "mcount" }, counts));
+            const chip = { field: g.field, value: v.value };
+            li.addEventListener("mousedown", (ev) => {
+              ev.preventDefault();
+              pick2(chip);
+            });
+            opts.push({ li, chip });
+            list.append(li);
+          }
+        }
+        list.hidden = opts.length === 0;
+      },
+      () => list.hidden = true
+    );
+  };
+  input.addEventListener("input", () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(ask, 150);
+  });
+  input.addEventListener("blur", () => window.setTimeout(() => list.hidden = true, 150));
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      if (!opts.length) return;
+      ev.preventDefault();
+      sel = (sel + (ev.key === "ArrowDown" ? 1 : opts.length - 1)) % opts.length;
+      mark();
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      if (sel >= 0 && !list.hidden) pick2(opts[sel].chip);
+      else go(joinQuery(chips2, input.value));
+    } else if (ev.key === "Escape") {
+      list.hidden = true;
+    } else if (ev.key === "Backspace" && input.value === "" && chips2.length) {
+      go(joinQuery(chips2.slice(0, -1), ""));
+    }
+  });
+  return box;
+}
+var KIND_NOUN = { movie: ["film", "films"], show: ["show", "shows"], album: ["album", "albums"], game: ["game", "games"] };
+function results(root, q) {
+  const note = h("div", { class: "mhits" }, "\u2026");
+  root.append(note);
+  mediaSearch(q).then(
+    (res) => {
+      const byKind = /* @__PURE__ */ new Map();
+      let n = 0;
+      for (const lib of res.libs) for (const it of lib.items) {
+        byKind.set(it.kind, (byKind.get(it.kind) ?? 0) + 1);
+        n++;
+      }
+      if (n === 0) {
+        note.remove();
+        const { chips: chips2, words } = splitQuery(q);
+        const drop = chips2.length ? h("a", { href: "#/media?q=" + encodeURIComponent(joinQuery(chips2.slice(0, -1), words)) }, "Drop " + chips2[chips2.length - 1].field) : null;
+        root.append(h("div", { class: "empty" }, "No films, shows or albums match ", h("b", null, q), ". ", drop));
+        return;
+      }
+      note.textContent = [`${n} ${n === 1 ? "match" : "matches"}`, ...[...byKind].map(([k, c]) => `${c} ${(KIND_NOUN[k] ?? [k, k + "s"])[c === 1 ? 0 : 1]}`)].join(" \xB7 ");
+      for (const lib of res.libs) {
+        const grid = h("div", { class: "posters" });
+        for (const it of lib.items) grid.append(posterTile(it));
+        root.append(h("section", { class: "lib " + lib.kind }, h("h2", null, basename(lib.path) || "/", " ", h("span", { class: "badge lib" }, lib.kind), h("span", { class: "count" }, String(lib.items.length))), grid));
+      }
+    },
+    (e) => note.textContent = "could not search: " + (e instanceof Error ? e.message : String(e))
+  );
+}
+function continueTile(it, drop) {
+  const img = h("img", { alt: "" });
+  const cart = h("span", { class: "cart" }, img);
+  const miss = () => img.style.visibility = "hidden";
+  if (it.kind === "track") lazyURL(img, thumbURL(dirname(it.path)), miss);
+  else if (!frameOf(img, it, miss)) lazyURL(img, thumbURL(it.thumb || it.video || it.path), miss);
+  if (it.next_up) cart.append(h("span", { class: "ov bl" }, "next up"));
+  if (it.progress) cart.append(h("span", { class: "ov br" }, left(it.progress)), progEl(it.progress));
+  let title = it.title;
+  let sub = it.year ? String(it.year) : "";
+  if (it.kind === "episode") {
+    title = it.show ?? it.title;
+    sub = `${episodeNo2(it)} \xB7 ${it.next_up ? "next episode" : it.title}`;
+  } else if (it.kind === "track") {
+    title = it.album || it.title;
+    sub = [it.artist, it.title].filter(Boolean).join(" \xB7 ");
+  }
+  const href = it.kind === "track" ? "#/media/now" : playHash(it.kind === "movie" && it.video ? it.video : it.path);
+  const a = h("a", { href }, cart, h("span", { class: "ctitle", title }, title), h("span", { class: "csub" }, sub));
+  if (it.kind === "track")
+    a.addEventListener("click", () => player.play([{ path: it.path }], 0, resumeFrom(it.progress)));
+  const file = it.kind === "movie" && it.video ? it.video : it.path;
+  const act = (action2) => {
+    const done = action2 === "watched" ? markWatched([file], true) : report({ path: file, action: "hide" });
+    done.then(drop, (e) => toast(String(e instanceof Error ? e.message : e), "bad"));
+  };
+  const menu2 = h(
+    "details",
+    { class: "menu" },
+    h("summary", { "aria-label": "more", title: "more" }, icon("more_vert")),
+    h("div", { class: "menu-body" }, h("button", { type: "button", class: "menu-row", onClick: () => act("watched") }, h("span", null, "Mark watched")), h("button", { type: "button", class: "menu-row", onClick: () => act("hide") }, h("span", null, "Remove from Continue watching")))
+  );
+  return h("div", { class: "ctile" }, a, menu2);
+}
+function continueSection(root) {
+  const row2 = h("div", { class: "crow" });
+  const countEl = h("span", { class: "count" });
+  const section2 = h("section", { class: "continue", hidden: true }, h("h2", null, "Continue watching", countEl), row2);
+  root.append(section2);
+  continueRow().then(
+    (res) => {
+      const draw = (items) => {
+        clear(row2);
+        countEl.textContent = String(items.length);
+        section2.hidden = items.length === 0;
+        items.forEach((it, i) => row2.append(continueTile(it, () => draw(items.filter((_, j) => j !== i)))));
+      };
+      draw(res.items);
+    },
+    () => void 0
+    // no viewer, or an older node: the tab without the row
+  );
+}
+function overview(root, query) {
+  const q = new URLSearchParams(query).get("q") ?? "";
+  root.append(h("section", null, searchField(q)));
+  if (q) {
+    results(root, q);
+    return;
+  }
+  continueSection(root);
   media().then(
     (res) => {
+      setLibraries(res.libs);
       if (res.libs.length === 0) {
         root.append(
           h(
@@ -4422,7 +5193,7 @@ function overview(root) {
     (e) => root.append(h("div", { class: "note" }, "could not list the libraries: " + (e instanceof Error ? e.message : String(e))))
   );
 }
-function episodeNo(e) {
+function episodeNo2(e) {
   const two = (n) => String(n).padStart(2, "0");
   if (e.part) return `Part ${e.part}`;
   if (!e.episode && e.date) return e.date;
@@ -4533,16 +5304,35 @@ function detail(root, path) {
         const sidecar = it.kind === "show" ? "tvshow.nfo" : it.path.includes(".") && it.video === it.path ? basename(it.path).replace(/\.[^.]+$/, "") + ".nfo" : "movie.nfo";
         body.append(h("p", { class: "plot dim" }, "No description: add a ", h("code", null, sidecar), it.kind === "show" ? " to the show's folder." : " beside the file."));
       }
+      const all = seasons.flatMap((s) => s.episodes);
       const first = seasons.find((s) => s.n > 0)?.episodes[0] ?? seasons[0]?.episodes[0];
-      const play = h("button", { type: "button" }, icon("play_arrow_fill"), it.kind === "show" && first ? `Play ${episodeNo(first)}` : "Play");
-      const target = it.kind === "show" ? first?.path : it.video;
-      if (target) play.addEventListener("click", () => location.hash = fileHash({ path: target }));
+      const next2 = it.kind === "show" ? all.find((e) => e.path === it.next) ?? first : void 0;
+      const prog2 = it.kind === "show" ? next2?.progress : it.progress;
+      const from = resumeFrom(prog2);
+      const target = it.kind === "show" ? next2?.path : it.video ? it.path : void 0;
+      const label = it.kind === "show" && next2 ? from ? `Resume ${episodeNo2(next2)} \xB7 ${left(prog2)}` : `Play ${episodeNo2(next2)}` : from ? `Resume \xB7 ${left(prog2)}` : prog2?.watched ? "Play again" : "Play";
+      const play = h("button", { type: "button", class: from ? "primary" : "" }, icon("play_arrow_fill"), label);
+      if (target) play.addEventListener("click", () => location.hash = playHash(target));
       else play.disabled = true;
       const folder3 = it.video === it.path ? dirname(it.path) : it.path;
-      body.append(h("div", { class: "actions" }, play, h("a", { class: "btn", href: browseHash({ path: folder3 }) }, "Open folder")));
+      const actions = h("div", { class: "actions" }, play);
+      if (from && target && it.kind !== "show") {
+        const file = it.video;
+        actions.append(
+          h("button", { type: "button", onClick: () => {
+            void markWatched([file], false).then(() => location.hash = playHash(target));
+          } }, icon("replay"), "Start over")
+        );
+      }
+      actions.append(h("a", { class: "btn", href: browseHash({ path: folder3 }) }, "Open folder"));
+      body.append(actions);
+      if (from && it.kind !== "show") body.append(progEl(prog2));
       if (it.people?.length) {
         const people = h("div", { class: "people" });
-        it.people.forEach((p, i) => people.append(h("span", { class: "person" }, i === 0 && it.kind === "movie" && it.people.length > 1 ? `${p} \xB7 director` : p)));
+        const dirs = it.directors ?? 0;
+        it.people.forEach(
+          (p, i) => people.append(i < dirs ? h("a", { class: "person", href: searchHash2("director", p) }, p, h("span", { class: "small dim" }, "director")) : h("a", { class: "person", href: searchHash2("actor", p) }, p))
+        );
         body.append(people);
       }
       if (seasons.length > 0) {
@@ -4563,20 +5353,42 @@ function detail(root, path) {
               img.addEventListener("error", miss);
             }
             thumb.append(img);
-            const title = h("td", { class: "title" }, e.title);
+            const title = h("td", { class: "title" });
+            if (e.progress?.watched) title.append(icon("check"));
+            title.append(e.title);
             if (e.plot) title.append(h("div", { class: "plot small dim" }, e.plot));
-            const row2 = h("tr", null, h("td", { class: "no" }, episodeNo(e)), thumb, title, h("td", { class: "dur" }, duration2(e.runtime)));
-            row2.addEventListener("click", () => location.hash = fileHash({ path: e.path }));
+            if (e.progress && !e.progress.watched && e.progress.pos > 0) title.append(progEl(e.progress));
+            const row2 = h("tr", { class: e.progress?.watched ? "watched" : "" }, h("td", { class: "no" }, episodeNo2(e)), thumb, title, h("td", { class: "dur" }, duration2(e.runtime)));
+            row2.addEventListener("click", () => location.hash = playHash(e.path));
             tbody.append(row2);
           }
         };
+        let shown = 0;
         seasons.forEach((s, i) => {
           const b = h("button", { type: "button", "aria-pressed": "false" }, s.title);
-          b.addEventListener("click", () => show(i));
+          b.addEventListener("click", () => {
+            shown = i;
+            show(i);
+            seasonLabel.textContent = seasons[i].title;
+          });
           strip.append(b);
         });
+        const seasonLabel = h("span", null, "");
+        const mark = (watched) => {
+          void markWatched(seasons[shown].episodes.map((e) => e.path), watched).then(
+            () => {
+              clear(root);
+              detail(root, path);
+            },
+            (e) => toast(String(e instanceof Error ? e.message : e), "bad")
+          );
+        };
+        const menu2 = h("details", { class: "menu" }, h("summary", null, seasonLabel), h("div", { class: "menu-body" }, h("button", { type: "button", class: "menu-row", onClick: () => mark(true) }, h("span", null, "Mark season watched")), h("button", { type: "button", class: "menu-row", onClick: () => mark(false) }, h("span", null, "Mark season unwatched"))));
+        actions.insertBefore(menu2, actions.lastElementChild);
         body.append(strip, table);
-        show(Math.max(0, seasons.findIndex((s) => s.n > 0)));
+        shown = Math.max(0, next2 ? seasons.findIndex((s) => s.episodes.some((e) => e.path === next2.path)) : seasons.findIndex((s) => s.n > 0));
+        show(shown);
+        seasonLabel.textContent = seasons[shown]?.title ?? "";
       }
       section2.append(h("div", { class: "hero-body" }, poster, body));
       if (noArt) hide();
@@ -4585,9 +5397,9 @@ function detail(root, path) {
     (e) => root.append(h("div", { class: "note" }, "could not open: " + (e instanceof Error ? e.message : String(e))))
   );
 }
-function render11(root, rest) {
+function render11(root, rest, query = "") {
   if (rest.startsWith("/item/")) detail(root, rest.slice("/item".length));
-  else overview(root);
+  else overview(root, query);
   return () => void 0;
 }
 
@@ -4648,8 +5460,21 @@ function rawRest(hash2) {
   const i = where.indexOf("/");
   return i < 0 ? "" : where.slice(i + 1);
 }
+var mainHash = "";
 function route() {
-  const { head, ctx, query } = parse2(location.hash || "#/");
+  const hash2 = location.hash || "#/";
+  if (isOverlay(hash2)) {
+    if (!mainHash) renderMain("#/media");
+    open(hash2, mainHash);
+    return;
+  }
+  close();
+  if (hash2 === mainHash) return;
+  renderMain(hash2);
+}
+function renderMain(hash2) {
+  mainHash = hash2;
+  const { head, ctx, query } = parse2(hash2);
   dispose?.();
   dispose = null;
   clear(view2);
@@ -4660,10 +5485,10 @@ function route() {
     dispose = render8(view2, ctx);
   } else if (head === "media") {
     tab = "media";
-    dispose = render11(view2, decodeHashPath(rawRest(location.hash)));
+    dispose = render11(view2, decodeHashPath(rawRest(hash2)), query);
   } else if (head === "search") {
     tab = "";
-    dispose = render10(view2, decodeHashPath(rawRest(location.hash)).slice(1), query);
+    dispose = render10(view2, decodeHashPath(rawRest(hash2)).slice(1), query);
   } else if (head === "file" || head === "trashfile" && ctx.root !== void 0) {
     tab = "files";
     dispose = render6(view2, ctx);
