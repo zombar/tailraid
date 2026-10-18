@@ -33,6 +33,10 @@ needs, each with a test in the copy:
 - `nfs_onfsinfo.go` advertises `rtmax`/`wtmax`/`rtpref`/`wtpref` of 1 MiB instead of
   1 GiB, so the frame bound is the protocol's own: a client that honours FSINFO never sends
   a WRITE larger than `MaxFrame`.
+- `nfs_oncreate.go` makes a file with the mode its CREATE's attributes ask for (0644 when
+  none), so the attributes applied after the create change nothing and the create is one
+  proposal (04 §6, I-416). Upstream created with 0666 and then chmodded, a `SetAttr`
+  proposal for every file a copy made.
 
 ## What go-nfs actually does (verified against v0.0.4 source)
 
