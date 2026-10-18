@@ -85,13 +85,19 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 		}
 	}
 
+	// tailraid: the file is made with the mode the CREATE asks for, so it lands in the
+	// one create and the attributes applied below find nothing to change (I-416)
+	perm := os.FileMode(0o644)
+	if attrs != nil && attrs.SetMode != nil {
+		perm = os.FileMode(*attrs.SetMode) & os.ModePerm
+	}
 	var file billy.File
 	if how == createModeGuarded || how == createModeExclusive {
 		// tailraid: GUARDED and EXCLUSIVE are exclusive. The Stat above saw this server's
 		// view only; another server over the same volume may have made the name since,
 		// and the filesystem's O_EXCL decides (docs/07, I-222). An EXCLUSIVE retransmission
 		// whose first attempt another server answered finds its own verifier.
-		file, err = fs.OpenFile(newFilePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+		file, err = fs.OpenFile(newFilePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, perm)
 		if errors.Is(err, os.ErrExist) {
 			if s, serr := fs.Stat(newFilePath); how == createModeExclusive && serr == nil && holdsVerifier(s, verf) {
 				return createReply(w, userHandle, fs, path, newFile, newFilePath)
@@ -99,7 +105,7 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 			return &NFSStatusError{NFSStatusExist, err}
 		}
 	} else {
-		file, err = fs.Create(newFilePath)
+		file, err = fs.OpenFile(newFilePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, perm)
 	}
 	if err != nil {
 		Log.Errorf("Error Creating: %v", err)

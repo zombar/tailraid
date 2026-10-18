@@ -473,7 +473,10 @@ request context and read through `ReadAt`.
   Other gateways see the new mode, owner and times with the data, at the flush (within
   the idle timer after the copy pauses, §3), and until then the create's. A SETATTR on a
   file with nothing dirty here, or one with a size, is proposed as before, and one that
-  changes nothing proposes nothing at all (I-402). While a live member reads codec 15 or
+  changes nothing proposes nothing at all (I-402). An NFS CREATE that carries a mode makes
+  the file with it in the create's one proposal, so the attributes go-nfs applies after
+  the create find nothing to change (I-416; the soak's phase 34 on the compose rig, whose
+  worker creates over NFS, found one SetAttr per file before it). While a live member reads codec 15 or
   older the flusher proposes the pending attributes as a `SetAttr` right after the Commit
   (what every release before codec 16 did for times). Times set on another gateway than
   the one holding the dirty data are not noted there: that Commit still stamps over
@@ -713,6 +716,8 @@ the WAL cap.
 - **I-402** — A SETATTR that changes nothing the inode holds proposes nothing.
 - **I-403** — `status` reports `gateway.proposals`, the proposals this gateway's filesystem
   made since start by op, and `gateway.attrs_deferred`, the SETATTRs it held for a flush.
+- **I-416** — An NFS CREATE (UNCHECKED or GUARDED) whose attributes set a mode makes the
+  file with that mode in its `Create` proposal, and no `SetAttr` follows it.
 - **I-219** — A Commit the leader refuses with `ErrCodec` (its view of the members' codec
   is older than the gateway's, as during a rolling upgrade) is built again without
   `Sums` and proposed again within the same flush attempt, so the codec gate never fails
@@ -757,4 +762,5 @@ the WAL cap.
 | I-401 | `TestEncodeCommand_V16Attrs`, `TestFSM_Commit_AppliesAttrs`, `TestOverlay_HoldAttrs_DirtyOnly`, `TestOverlay_HoldAttrs_WriteDropsTimes`, `TestOverlay_Attrs_CaptureCommitAbort`, `TestOverlay_Attrs_PinTheirSegment`, `TestVFS_CopyLandsWhole`, `TestCluster_AttrsLandWhileMemberOld` |
 | I-402 | `TestVFS_SetAttr_NoChangeNoProposal` |
 | I-403 | `TestVFS_CopyLandsWhole`, `TestGatewayReport_Proposals` |
+| I-416 | `TestNFS_CreateMode_NoSetAttr` |
 | I-101 | `TestWAL_FsyncFailureReopens`, `TestWAL_CompactReopenFailureClosesLog` |
