@@ -61,14 +61,7 @@ Draining a device drains its disks too.
 
 ## Redundancy
 
-By default the cluster picks the redundancy (`k+m`) itself and adjusts it as devices and disks come and go:
-
-| Setup | Policy | Survives |
-|---|---|---|
-| 1 device, no extra disks | 1+0 | nothing |
-| 1 device + 3 disks | 2+2 | 2 disks |
-| 3 devices | 2+1 | 1 device |
-| 4 hosts × 3 disks | 6+2 | 2 disks, or 1 whole host |
+By default the cluster picks the redundancy (`k+m`) itself and adjusts it as devices and disks come and go. The README's [examples](../README.md#redundancy-by-example) show what the rule picks for common setups, what each policy survives in disks and in whole devices, and what it stores per byte.
 
 To pin it by hand, or to hand it back:
 

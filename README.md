@@ -71,7 +71,25 @@ tailraid mount
 
 Write a file on one device and read it on any other. `tailraid status` shows the whole cluster and prints the browser UI's address; `tailraid dashboard` opens it.
 
-`init` needs no options: each disk's budget follows its free space, and the redundancy follows the devices and disks the cluster has ([redundancy](docs/guide-capacity.md#redundancy)). To give tailraid a disk other than the data directory, list it under `node.disks` in the config before `init`, or add it later with `tailraid node add-disk`.
+`init` needs no options: each disk's budget follows its free space, and the redundancy follows the devices and disks the cluster has ([examples below](#redundancy-by-example), [the guide](docs/guide-capacity.md#redundancy)). To give tailraid a disk other than the data directory, list it under `node.disks` in the config before `init`, or add it later with `tailraid node add-disk`.
+
+## Redundancy by example
+
+A policy `k+m` cuts every chunk into `k` data shards and `m` parity shards, each on a different disk or bucket, and any `k` of the `k+m` can rebuild it. So a volume needs at least `k+m` targets, stores `(k+m)/k` bytes per byte of data, and loses nothing until more than `m` shards of one chunk are gone at once. What that means in whole devices depends on how the slots spread: a host with several disks holds several shards of a stripe, so losing it costs more than one. Data shards prefer the disks of voters (the always-on devices) and a read fetches data shards before parity, so when `k` is larger than the number of voter disks, one data shard of every stripe lives on a laptop or a bucket and a cold read goes there. The policy is automatic unless pinned with `tailraid volume set-redundancy`; `tailraid status` prints what the current one survives.
+
+| Setup | Policy | Survives | Stored per byte | Notes |
+|---|---|---|---|---|
+| One device, one disk | 1+0 | nothing | 1.00x | One copy. Add a disk or a device before you rely on it. |
+| One device with four disks | 2+2 | 2 disks, no host | 2.00x | Every stripe is on the one host, so its loss is the volume's. |
+| Two always-on devices | 1+1 | 1 disk, 1 host | 2.00x | Mirroring: each chunk whole on both. |
+| A laptop, a diskless cloud voter and a bucket | 1+1 | 1 disk, 1 host | 2.00x | The cheapest always-on setup: the voter holds the metadata and no data, the bucket a copy of everything, so the volume reads with the laptop closed. |
+| Three always-on devices, one disk each | 2+1 | 1 disk, 1 host | 1.50x | The smallest setup that survives a whole device without doubling the bytes. |
+| Three always-on devices and two laptops | 3+2 | 2 disks, 2 hosts | 1.67x | Every data shard is on an always-on device, so the volume reads with both laptops asleep. |
+| Three always-on devices, one with two disks, a laptop and a bucket | 4+2 | 2 disks, 1 host | 1.50x | `k` follows the four voter disks; the device with two of them holds two shards of every stripe, so it is the one host the policy survives. Pinning 3+2 here spreads five slots over five hosts and survives two of them, at 1.67x. |
+| The same with a second bucket | 4+2 | 2 disks, 2 hosts | 1.50x | Six slots over six hosts, one each. The buckets and the laptop hold parity only, so a cold read never touches a bucket while the voter disks are up. |
+| The same, pinned to 5+2 | 5+2 | 2 disks, 1 host | 1.40x | Every target holds a slot of every chunk: nothing is spare, so one target away makes every new write degraded, and the fifth data shard lands on a bucket for most chunks, so most cold reads fetch from it. Not worth the 0.1x. |
+| The same, pinned to 5+3 | 5+3 | 3 disks, 1 host | 1.60x | Refused until there are eight targets. With them it survives any three, but the two-disk host still caps it at one whole host, and it stores more than 4+2. |
+| Four always-on devices with three disks each | 6+2 | 2 disks, 1 host | 1.33x | `k` stops at 6. The most compact policy the rule picks: eight slots over four hosts, two each, so losing a host costs exactly the parity. |
 
 ## Guides
 
