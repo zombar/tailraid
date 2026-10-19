@@ -400,8 +400,11 @@ below are the same as for a manual change.
 4. Progress: `PolicyMigrated / PolicyTotal` where `PolicyTotal` is the count of chunks whose
    `(K, M)` differed at the moment of the change; `volume describe` shows it and an ETA from
    the rate limiter.
-5. A second policy change during migration simply retargets: the scanner compares every
-   chunk with the current policy, never with the previous one.
+5. A second policy change during migration simply retargets: the scanner reads the
+   volume's policy for each chunk it visits, never once per pass (a pass over every member
+   of a class can run for days), so after the change only the chunks already in flight, at
+   most `repair.workers`, land on the previous target and every later one migrates to the
+   current policy; the chunks the change left stale wait for the next pass (I-417).
 
 Capacity: a change that increases `(K+M)/K` needs headroom; `set-redundancy` prints the
 projected stored bytes and refuses if projected > Σ capacity unless `--force`.
@@ -486,6 +489,9 @@ state to patch.
   member's state, liveness and fitness to take a shard, and the volume's policy) changes,
   `StuckRetry` passes or a sweep visits it; a class with a failed attempt is visited
   again by the next pass.
+- **I-417** — A repair pass reads the volume's policy per chunk: once a `SetVolume` is
+  applied, no chunk the pass starts afterwards is migrated to the previous policy, so at
+  most `Workers` chunks of a pass land on a policy that is no longer the volume's.
 - **I-195** — Every path under `/.tailraid/` is ephemeral: a replace or a delete of one
   unlinks it at once and never trashes it, and the web file browser lists nothing under it
   (I-160); on the mounts the tree is plain files and folders.
@@ -521,5 +527,6 @@ state to patch.
 | I-378 | `TestClasses_RepresentativeMatchesEveryMember`, `TestScanHealth_FromClassesMatchesEveryChunk` |
 | I-379 | `TestRepair_HomeReturns_SweepsAndMovesHome`, `TestRepair_PassVisitsOnlyWhereWorkIs`, `TestRepair_ScrubPeriod_CoversEveryChunkOnce`, `TestRepair_RefillGoesHome_Table` |
 | I-380 | `TestRepair_StuckClassWaitsForTheView`, `TestRepair_PutFails_Retries` |
+| I-417 | `TestRepair_PolicyChangeMidPass_Retargets` |
 | I-195 | `TestWebUI_Ls_HidesTailraidTree`; `TestStub_I_195` (planned with the trash of docs/02: TestVFS_TailraidTree_IsEphemeral) |
 | I-182 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestSchedule_TakesAndThins_Table`, `TestSchedule_OfflineMirrorNothingHeld_CatchUpOnAttach`, `TestSchedule_ThinThenSweep`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestConfig_Mirrors`, `TestSchedule_AutoNameTaken_NoRetry`, `TestSchedule_SkipsWhileCodecOld` |

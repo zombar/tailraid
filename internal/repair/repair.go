@@ -657,7 +657,10 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 			r.mu.Lock()
 			r.progress.InFlight++
 			r.mu.Unlock()
-			one := r.scanOne(ctx, c, vol, nodes, hv, reportedKeys[c.Hash], scrub(c.Hash))
+			// the policy is read per chunk, never once per pass: a SetVolume applied
+			// mid-pass retargets every chunk started after it (docs/06 §7.5, I-417); the
+			// classes the pass chose keep the view it was judged with
+			one := r.scanOne(ctx, c, r.st.Volume(), nodes, hv, reportedKeys[c.Hash], scrub(c.Hash))
 			r.mu.Lock()
 			r.progress.InFlight--
 			r.progress.Scanned++
