@@ -962,3 +962,64 @@ func TestRepair_MigrationCrash_Resumes(t *testing.T) {
 		}
 	}
 }
+
+// switchOnPut wraps a node's shard client so the first PUT of a pass runs a change (a
+// policy proposal) before it goes through, pinning what a pass does after the change.
+type switchOnPut struct {
+	repair.Shards
+	once   sync.Once
+	change func()
+}
+
+func (s *switchOnPut) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, body []byte) error {
+	s.once.Do(s.change)
+	return s.Shards.Put(ctx, node, key, body)
+}
+
+// A policy change during a pass retargets: the pass reads the volume's policy per chunk,
+// so once `set-redundancy` lands mid-pass only the chunk already in flight may land on
+// the pass-start policy and every later chunk migrates to the current one (docs/06 §7).
+// Invariant: I-417
+func TestRepair_PolicyChangeMidPass_Retargets(t *testing.T) {
+	c := testharness.NewCluster(t, 5, 2, 1)
+	defer c.Close()
+	data := testharness.Pattern(4*int(testharness.ChunkSize), 11)
+	c.WriteFile(0, "/f", data)
+	c.Settle()
+	leader := c.Leader()
+	setPolicy := func(k, m uint8) {
+		res, _, err := leader.Node.Propose(ctx, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: k, M: m, Now: c.Clk.Now().UnixNano()}})
+		must(t, err)
+		must(t, res.Err)
+		c.Settle()
+	}
+	setPolicy(3, 2) // the pass starts out migrating 2+1 → 3+2
+	sw := &switchOnPut{Shards: leader.Client, change: func() { setPolicy(2, 2) }}
+	cfg := repairCfg()
+	cfg.Workers = 1 // exactly one chunk is in flight when the policy changes
+	r := repairerWithCfg(c, leader, sw, cfg)
+	count := func() (on32, on22 int) {
+		for _, ch := range c.ChunksOf(0, "/f") {
+			switch {
+			case ch.K == 3 && ch.M == 2:
+				on32++
+			case ch.K == 2 && ch.M == 2:
+				on22++
+			default:
+				t.Fatalf("chunk on %d+%d", ch.K, ch.M)
+			}
+		}
+		return on32, on22
+	}
+	st, err := r.Scan(ctx)
+	must(t, err)
+	if on32, on22 := count(); on32 > 1 || on32+on22 != 4 {
+		t.Fatalf("after the change: %d chunks on the pass-start 3+2, %d on 2+2 (stats %+v)", on32, on22, st)
+	}
+	// the chunk that was in flight at the change is stale now; the next pass migrates it
+	_, err = r.Scan(ctx)
+	must(t, err)
+	if on32, on22 := count(); on32 != 0 || on22 != 4 {
+		t.Fatalf("after the next pass: %d chunks on 3+2, %d on 2+2", on32, on22)
+	}
+}
