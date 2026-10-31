@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -267,16 +268,45 @@ func TestChunkRPC_HashMismatchRejected(t *testing.T) {
 	}
 }
 
-// Lifecycle: L-44
+// A shard the store cannot hold is refused by its announced length, before the body is
+// read and before a slot is taken: the store's PutVerified never runs for it, whatever
+// the size of the body (under and over the server's post-handler read allowance).
+// Invariant: I-420
+// Lifecycle: L-44, L-138
 func TestChunkRPC_FullNodeIs507(t *testing.T) {
-	e := newEnv(t)
-	small, _ := chunk.Open(sysfs.OS{}, filepath.Join(t.TempDir(), "s"), 100)
-	e.store = small
-	c := e.client()
-	p := bytes.Repeat([]byte{1}, 200)
-	if err := c.Put(ctx, 1, key(p, 0), p); !errors.Is(err, chunk.ErrFull) {
-		t.Fatalf("full: %v", err)
+	for _, size := range []int{200, 300 << 10} {
+		small, _ := chunk.Open(sysfs.OS{}, filepath.Join(t.TempDir(), "s"), 100)
+		spy := &putSpy{ShardStore: small}
+		e := newEnvWith(t, func(o *Options) {
+			o.MaxShard = 1 << 20
+			o.Disk = func(string) (ShardStore, meta.NodeIdx, bool) { return spy, 1, true }
+		})
+		c := e.client()
+		p := bytes.Repeat([]byte{1}, size)
+		for _, bg := range []bool{false, true} {
+			pctx := ctx
+			if bg {
+				pctx = chunk.Background(ctx)
+			}
+			if err := c.Put(pctx, 1, key(p, 0), p); !errors.Is(err, chunk.ErrFull) {
+				t.Fatalf("%d bytes, background %v: %v, want ErrFull", size, bg, err)
+			}
+		}
+		if n := spy.puts.Load(); n != 0 {
+			t.Fatalf("%d bytes: the store's PutVerified ran %d times for a shard it could not hold", size, n)
+		}
 	}
+}
+
+// putSpy counts the PutVerified calls that reach a store.
+type putSpy struct {
+	ShardStore
+	puts atomic.Int64
+}
+
+func (s *putSpy) PutVerified(k chunk.ShardKey, payload []byte, sum [32]byte) (int64, error) {
+	s.puts.Add(1)
+	return s.ShardStore.PutVerified(k, payload, sum)
 }
 
 // Review #4/#14: the DELETE fence.

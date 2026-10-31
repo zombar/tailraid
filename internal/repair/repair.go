@@ -89,9 +89,10 @@ const DefaultHomeStart = 0.05
 // (docs/14 §7, I-311): the moves resume once it passes and the threshold still holds.
 const HomeHold = 30 * time.Minute
 
-// fullHold is how long a target that answered ErrFull to a repair PUT is not a home
-// destination: the flusher's hold-down for the same answer (docs/14 §7).
-const fullHold = 10 * time.Minute
+// FullHold is how long a target that answered ErrFull to a repair PUT is no destination
+// for a refill or a home move (I-419): the flusher's hold-down for the same answer
+// (docs/14 §7).
+const FullHold = 10 * time.Minute
 
 // MaxWorkers bounds Config.Workers (`repair.workers`).
 const MaxWorkers = 64
@@ -134,6 +135,7 @@ type Stats struct {
 	Homed        int   `json:"homed"`     // chunks whose away slots moved home (docs/14 §7)
 	BytesMoved   int64 `json:"bytes_moved"`
 	Errors       int   `json:"errors"`
+	NoRoom       int   `json:"no_room"` // chunks with a bad slot and no target with room for the refill: not read (I-419)
 	// the data-shard sums backfill (docs/06 §4, I-201): chunks whose sums this pass
 	// recorded, and chunks still without them after it
 	SumsRecorded int `json:"sums_recorded"`
@@ -178,6 +180,7 @@ func (s *Stats) add(o Stats) {
 	s.Scrubbed += o.Scrubbed
 	s.ScrubBad += o.ScrubBad
 	s.Homed += o.Homed
+	s.NoRoom += o.NoRoom
 	s.StoredBytes += o.StoredBytes
 	s.AwaySlots += o.AwaySlots
 	s.AwayBytes += o.AwayBytes
@@ -200,6 +203,12 @@ type Repairer struct {
 	// Held, when set, reports a node whose host is held slow (docs/05 §6, I-371): no refill
 	// or home move goes to it, while its slots stay good. nil holds nothing.
 	Held func(meta.NodeIdx) bool
+	// Room, when set, is a target's free bytes by its last probe (the prober's): a target
+	// with less than a shard's worth is no destination, so a chunk is never read for a
+	// refill its only target would refuse (I-419). known is false for a bucket, a device
+	// or an unprobed row, which count as having room. nil counts every target as having
+	// room.
+	Room func(meta.NodeIdx) (free int64, known bool)
 	// warnRepair and warnPut keep a fault at one line a minute per site (I-124)
 	warnRepair, warnPut logx.Limiter
 	sumsLeft            atomic.Int64 // the pass's remaining sums backfills (SumsBatch, I-201)
@@ -241,6 +250,7 @@ type Repairer struct {
 	homeIdle   bool                       // the previous pass found no bad slot and no migration
 	homeHeld   time.Time                  // a pass whose home moves all failed shuts the gate until then (I-311)
 	full       map[meta.NodeIdx]time.Time // targets that answered ErrFull, not a destination until then
+	noRoomOn   []meta.NodeIdx             // the last pass's live targets without room (I-421)
 }
 
 // New wires a repairer. log may be nil.
@@ -324,7 +334,7 @@ func (r *Repairer) PlanHome() HomePlan {
 		away := hv.Away(c.Placement, int(c.K), hv.Home(c.Hash, int(c.K), int(c.M)))
 		p.AwaySlots += len(away)
 		p.AwayBytes += int64(len(away)) * shard
-		for _, mv := range hv.Moves(c, r.dest) {
+		for _, mv := range hv.Moves(c, func(n meta.NodeIdx) bool { return r.canTake(n, need(c, c.K)) }) {
 			f := flows[pair{mv.From, mv.To}]
 			if f == nil {
 				f = &HomeFlow{From: mv.From, FromName: names[mv.From], To: mv.To, ToName: names[mv.To]}
@@ -352,17 +362,55 @@ func (r *Repairer) PlanHome() HomePlan {
 	return p
 }
 
-// writable is the live set a refill may place on: live, and not held slow (I-371).
-func (r *Repairer) writable() map[meta.NodeIdx]bool {
-	live := meta.LiveSet(r.live.Live())
-	if r.Held != nil {
-		for n := range live {
-			if r.Held(n) {
-				delete(live, n)
-			}
+// writable is the set a refill of need bytes may place on: live (not suspect), not held
+// slow (I-371), not holding back an ErrFull answer and with room for the shard by its
+// last probe (I-419). blocked counts the live targets left out for the last two reasons.
+func (r *Repairer) writable(need int64) (live map[meta.NodeIdx]bool, blocked int) {
+	live = meta.LiveSet(r.live.Live())
+	for n := range live {
+		switch {
+		case r.Held != nil && r.Held(n):
+			delete(live, n)
+		case !r.canTake(n, need):
+			delete(live, n)
+			blocked++
 		}
 	}
-	return live
+	return live, blocked
+}
+
+// need is what a refill of one shard of c under k takes on a target: the shard and the
+// store's header, as the store reserves it.
+func need(c meta.Chunk, k uint8) int64 {
+	return int64(chunk.HeaderSize + ec.ShardLen(int(c.Size), int(k)))
+}
+
+// volNeed is need for a full chunk of the volume.
+func volNeed(vol meta.Volume) int64 {
+	return int64(chunk.HeaderSize + ec.ShardLen(int(vol.ChunkSize), int(vol.K)))
+}
+
+// hasRoom reports whether n's last probe left room for need bytes; unknown is room.
+func (r *Repairer) hasRoom(n meta.NodeIdx, need int64) bool {
+	if r.Room == nil {
+		return true
+	}
+	free, known := r.Room(n)
+	return !known || free >= need
+}
+
+// canTake reports whether n can take a shard of need bytes moved or refilled: dest and
+// room (I-419).
+func (r *Repairer) canTake(n meta.NodeIdx, need int64) bool {
+	return r.dest(n) && r.hasRoom(n, need)
+}
+
+// NoRoomTargets lists the live targets the last pass could not refill onto: marked full
+// by an ErrFull answer or without room by their last probe (I-421).
+func (r *Repairer) NoRoomTargets() []meta.NodeIdx {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.noRoomOn)
 }
 
 // dest reports whether n can take a shard moved or refilled home: live (not suspect),
@@ -383,7 +431,7 @@ func (r *Repairer) dest(n meta.NodeIdx) bool {
 
 func (r *Repairer) markFull(n meta.NodeIdx) {
 	r.mu.Lock()
-	r.full[n] = r.clk.Now().Add(fullHold)
+	r.full[n] = r.clk.Now().Add(FullHold)
 	r.mu.Unlock()
 }
 
@@ -544,9 +592,14 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	view := r.view(all, vol)
 	badClasses, badChunks := r.badClasses(vol, nodes, view, now)
 	dest := map[meta.NodeIdx]bool{}
+	var noRoomOn []meta.NodeIdx
 	for i := range all {
-		if r.dest(all[i].Idx) {
-			dest[all[i].Idx] = true
+		n := &all[i]
+		switch {
+		case r.canTake(n.Idx, volNeed(vol)):
+			dest[n.Idx] = true
+		case n.Kind.Target() && n.State == meta.Active && r.live.IsLive(n.Idx) && (r.Held == nil || !r.Held(n.Idx)):
+			noRoomOn = append(noRoomOn, n.Idx) // live, and yet no refill can go there (I-421)
 		}
 	}
 	r.mu.Lock()
@@ -690,6 +743,10 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	st.StoredBytes = int64(r.st.Stats().StoredBytes) //nolint:gosec // bytes of a volume
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.noRoomOn = nil
+	if st.NoRoom > 0 {
+		r.noRoomOn = noRoomOn
+	}
 	for key := range badClasses {
 		if !visited[key] {
 			continue
@@ -770,7 +827,7 @@ func (r *Repairer) view(all []meta.Node, vol meta.Volume) string {
 	fmt.Fprintf(&b, "%d+%d;", vol.K, vol.M)
 	for i := range all {
 		n := all[i].Idx
-		fmt.Fprintf(&b, "%d:%d:%t:%t;", n, all[i].State, r.live.IsLive(n), r.dest(n))
+		fmt.Fprintf(&b, "%d:%d:%t:%t:%t;", n, all[i].State, r.live.IsLive(n), r.dest(n), r.hasRoom(n, volNeed(vol)))
 	}
 	return b.String()
 }
@@ -935,6 +992,9 @@ func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, n
 		st.Deferred++ // fewer than k acks: the old encoding stays committed, retried next pass
 	case !outcome.changed:
 		// no live spare could take the bad slots; counted as still degraded
+		if outcome.noRoom {
+			st.NoRoom++
+		}
 	case migrate:
 		// the chunk is on the new policy now; with missing slots it is also partial
 		st.Migrated++
@@ -992,7 +1052,7 @@ func (r *Repairer) homeOne(ctx context.Context, c meta.Chunk, vol meta.Volume, h
 	st.AwaySlots += len(away)
 	st.AwayBytes += int64(len(away)) * shard
 	st.DiskSkew += diskSkew(hv, c, home, away)
-	movable := hv.Movable(c, r.dest)
+	movable := hv.Movable(c, func(n meta.NodeIdx) bool { return r.canTake(n, need(c, c.K)) })
 	st.MovableBytes += int64(len(movable)) * shard
 	if len(movable) == 0 {
 		return false
@@ -1048,16 +1108,13 @@ type outcome struct {
 	changed bool // a new placement was committed
 	tried   bool // a PUT was attempted or the commit lost a race: the next pass retries (I-380)
 	full    bool
+	noRoom  bool // nothing to put because every target left was full or without room (I-419)
 	bytes   int64
 }
 
 // repairOne re-places the bad slots (or every slot for a migration), commits the new
 // placement and only then deletes superseded shards (docs/06 §4 steps 1–6).
 func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotIssue, kept []meta.NodeIdx, migrate bool, vol meta.Volume, hv *meta.HomeView) (outcome, error) {
-	data, err := r.rd.ReadChunk(ctx, c.Hash)
-	if err != nil {
-		return outcome{}, fmt.Errorf("read: %w", err)
-	}
 	k, m := c.K, c.M
 	if migrate {
 		k, m = meta.TargetPolicy(c, vol)
@@ -1066,16 +1123,32 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 	if err != nil {
 		return outcome{}, err
 	}
-	shards, err := codec.Encode(data)
-	if err != nil {
-		return outcome{}, err
-	}
-	plan := planSlots(c, bad, kept, migrate, k, m, hv, r.st.Nodes(), r.writable(), r.dest)
+	// the plan comes before the read: a chunk with nowhere to put a shard is not fetched
+	// only to have its PUT refused (I-419)
+	live, blocked := r.writable(need(c, k))
+	plan := planSlots(c, bad, kept, migrate, k, m, hv, r.st.Nodes(), live, func(n meta.NodeIdx) bool { return live[n] })
 	newPlace, unchanged, readableBad := plan.place, plan.unchanged, plan.readableBad
 	if !meta.ValidPlacement(k, m, newPlace) {
 		// a planner bug, never a state the FSM accepts: refuse it here, before any PUT
 		// moves bytes for a SetPlacement that can only be rejected (I-311)
 		return outcome{}, fmt.Errorf("planned placement %v of %d+%d: %w", newPlace, k, m, meta.ErrBadCommand)
+	}
+	toPut := false
+	for i, n := range newPlace {
+		if n != 0 && !unchanged[i] {
+			toPut = true
+		}
+	}
+	if !toPut {
+		return outcome{noRoom: blocked > 0}, nil // nothing placeable: nothing read, nothing tried (L-185, L-223)
+	}
+	data, err := r.rd.ReadChunk(ctx, c.Hash)
+	if err != nil {
+		return outcome{}, fmt.Errorf("read: %w", err)
+	}
+	shards, err := codec.Encode(data)
+	if err != nil {
+		return outcome{}, err
 	}
 	var moved int64
 	acked := 0

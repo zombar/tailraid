@@ -170,7 +170,10 @@ which is worse than a slow one. A transport failure still marks suspect, as abov
 - A node whose chunk store would exceed its configured capacity returns `ErrFull` → RPC
   `507`. The flusher treats it like a failed slot (re-place once, else record 0).
 - `/health` carries free bytes; the gateway doing a flush excludes nodes with < 1 shard of
-  headroom, and nodes that answered `507` recently, from its own candidate list (03).
+  headroom, and nodes that answered `507` recently, from its own candidate list (03); the
+  repairer plans a refill the same way, before it reads the chunk (06 §4, I-419).
+- A node refuses a PUT its store cannot hold by the announced length, before the body;
+  the repairer's PUTs ask to continue first, so the shard never leaves the sender (I-420).
 - Each added disk has its own budget and its own `507` (14 §3); a full disk does not stop
   its host's other targets.
 - WAL and raft.db live on the device's own disk; if that disk is full, WRITE returns

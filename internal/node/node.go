@@ -322,6 +322,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	repairer.Events = ring
 	repairer.MinCodec = prober.MinCodec // no sums backfill while a member reads codec 4 (I-219)
 	repairer.Held = prober.Held         // no refill or home move onto a host held slow (I-371)
+	repairer.Room = prober.Free         // no refill onto a disk without room for the shard (I-419)
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
 	gc.Retention = rcfg.Retention
@@ -1222,6 +1223,9 @@ func (a *adminOps) dispatch(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 		rep := admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, prog, op.Files)
 		_, rep.Warnings = a.mirrors.report(a.clk.Now(), a.node.FSM.Snapshots())
+		if w := admin.NoRoomWarning(st.NoRoom, admin.TargetNames(a.node.FSM.Nodes(), a.repairer.NoRoomTargets())); w != "" {
+			rep.Warnings = append(rep.Warnings, w) // degraded chunks waiting on a full target (I-421)
+		}
 		rep.Warnings = append(rep.Warnings, a.userWarnings(ctx)...)        // dormant users, bindings to no one (docs/21 §8, I-358)
 		rep.Warnings = append(rep.Warnings, a.cfg.Warnings(a.cfg.Path)...) // this device's files on disk (docs/08, I-341)
 		rep.Warnings = append(rep.Warnings, admin.PathWarnings(a.paths.Report())...)

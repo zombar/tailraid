@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -786,8 +789,77 @@ func repairerWith(c *testharness.Cluster, nd *testharness.ClusterNode, shards re
 func repairerWithCfg(c *testharness.Cluster, nd *testharness.ClusterNode, shards repair.Shards, cfg repair.Config) *repair.Repairer {
 	r := repair.New(nd.Node.FSM, nd.Node, nd.Prober, shards, nd.Reader, c.Clk, cfg, nil)
 	r.Events = nd.Events
+	r.Room = nd.Prober.Free // as the node wires it: no refill onto a disk without room (I-419)
 	return r
 }
+
+// A refill whose only spare is full moves nothing: the leader's prober knows the disk's
+// free bytes, the plan finds no target, the chunk is neither fetched nor uploaded, the
+// pass counts it no_room and its class is stuck; the pass after room appears refills it.
+// Invariant: I-419
+// Lifecycle: L-223
+func TestRepair_FullSpare_NoReadsNoPuts(t *testing.T) {
+	c := testharness.NewCluster(t, 4, 2, 1)
+	defer c.Close()
+	leader := c.Leader()
+	spare := (leader.I + 1) % 4
+	c.Kill(spare)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	data := testharness.Pattern(int(testharness.ChunkSize), 67)
+	c.WriteFile(leader.I, "/f", data)
+	c.Settle()
+	ch := c.ChunksOf(leader.I, "/f")[0]
+	victim := holdersBySlot(c, ch, leader)[0]
+	c.Kill(victim)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	c.Clk.Advance(cluster.FillAfter)
+	c.Probe()
+	c.Restart(spare)
+	c.Nodes[spare].Store.SetCapacity(1) // the spare is back, and full
+	c.Settle()
+	var shardCalls atomic.Int64
+	leader.Client.WrapTransport(func(base http.RoundTripper) http.RoundTripper {
+		return rtFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.HasPrefix(r.URL.Path, "/v1/disks/") && (r.Method == http.MethodGet || r.Method == http.MethodPut) {
+				shardCalls.Add(1)
+			}
+			return base.RoundTrip(r)
+		})
+	})
+	r := repairerWith(c, leader, leader.Client)
+	st, err := r.Scan(ctx)
+	must(t, err)
+	if st.NoRoom != 1 || st.Repaired != 0 || st.Partial != 0 {
+		t.Fatalf("with the only spare full: %+v", st)
+	}
+	if n := shardCalls.Load(); n != 0 {
+		t.Fatalf("%d shard GETs or PUTs for a refill with nowhere to go", n)
+	}
+	if after := c.ChunksOf(leader.I, "/f")[0]; !equalPlacement(after.Placement, ch.Placement) {
+		t.Fatalf("placement changed with nowhere to put: %v -> %v", ch.Placement, after.Placement)
+	}
+	st, err = r.Scan(ctx)
+	must(t, err)
+	if st.Scanned != 0 {
+		t.Fatalf("the class was visited again under the same view: %+v", st)
+	}
+	c.Nodes[spare].Store.SetCapacity(1 << 40)
+	c.Probe() // the leader learns the room: the view changed
+	st, err = r.Scan(ctx)
+	must(t, err)
+	if st.Repaired != 1 || st.NoRoom != 0 {
+		t.Fatalf("after room appeared: %+v", st)
+	}
+	if got, err := c.ReadFileCold(spare, "/f"); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read after the refill: %v", err)
+	}
+}
+
+type rtFunc func(*http.Request) (*http.Response, error)
+
+func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // A repair whose PUT fails leaves the committed placement alone and is retried on the next
 // pass; nothing is proposed for a slot that did not land, and a failed attempt does not

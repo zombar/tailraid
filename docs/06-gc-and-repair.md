@@ -212,11 +212,14 @@ A slot `i` of chunk `c` is **bad** when any of:
 
 A chunk with ≥ 1 bad slot and ≥ k good live slots is **repairable**. Repair of one chunk:
 
-1. `chunk := rd.ReadChunk(hash)` (verifies the hash; needs k good shards).
-2. Determine target `(k', m')`: current policy for case 4, else the chunk's own.
-3. `newPlacement`: each refilled slot goes to its home target (14 §7) when that target
-   holds no slot of the chunk and is live, not suspect and has room (I-296); the rest
-   `FillPlacement(hash, liveCandidates − goodNodes(kept slots))`, counting the domains of
+1. Determine target `(k', m')`: current policy for case 4, else the chunk's own.
+2. `newPlacement`, planned **before anything is read** (I-419): the candidates are the
+   targets that are live, not suspect, not held slow (I-371), not holding back an
+   `ErrFull` answer (`FullHold`, 10 min) and with room for the shard by their last probe
+   (`/health`'s free bytes, 05 §8; a bucket and an unprobed row count as having room).
+   Each refilled slot goes to its home target (14 §7) when that target holds no slot of
+   the chunk and is a candidate (I-296); the rest
+   `FillPlacement(hash, candidates − goodNodes(kept slots))`, counting the domains of
    the kept slots against the host cap (I-89). Slots no one serves are filled before
    slots whose holder still serves them (draining, skewed, away): their holders stand in
    while the others are filled, so a lone spare replaces a missing shard first (I-65); an
@@ -224,8 +227,16 @@ A chunk with ≥ 1 bad slot and ≥ k good live slots is **repairable**. Repair 
    its holder. For case 4
    every slot is re-placed (under the new keys `hex.k'-m'.idx`, which cannot collide with
    the old files); for cases 1–3 and 5 only the bad slots, keeping good ones in place; slot
-   `i` keeps index `i`.
-4. `codec(k', m').Encode(chunk)`; PUT the new shards to their nodes. Slots whose PUT fails
+   `i` keeps index `i`. A plan that gives no slot a new target ends here: nothing is
+   read, nothing is tried, and when a live target was left out for lack of room the chunk
+   counts as `no_room` (L-223). Before 0.11.1 the read came first and the fallback
+   placement ignored the full mark, so a volume whose only spare was full fetched and
+   re-encoded every degraded chunk once a minute only to have its PUT refused (14 MB/s
+   each way on the real cluster, around the clock).
+3. `chunk := rd.ReadChunk(hash)` (verifies the hash; needs k good shards).
+4. `codec(k', m').Encode(chunk)`; PUT the new shards to their nodes. A target that answers
+   `ErrFull` is marked full for `FullHold` and is no candidate for the chunks after it.
+   Slots whose PUT fails
    stay `0`: repair may fill **partially** (a chunk goes from 1 good slot to 3 of 5 rather
    than waiting for 5) and the next scan pass fills the rest. For case 4, however, the new
    placement must have ≥ k' acked slots before step 5, or the migration of that chunk is
@@ -322,14 +333,21 @@ a pass costs the number of classes; a sweep costs one walk an hour. A test rig s
 `SweepInterval` to 0 to sweep every pass.
 
 **Stuck classes (I-380).** A class whose chunks a pass visited and could do nothing for,
-with no PUT tried (no live spare outside the kept slots, fewer than k readable slots), is
+with no PUT tried (no live spare outside the kept slots, every spare full or without
+room, fewer than k readable slots), is
 **stuck** under the view it was judged in: each member's state, liveness and whether it
-can take a shard now (not held slow, not marked full), and the volume's policy. The
+can take a shard now (not held slow, not marked full, room for a full shard by its last
+probe), and the volume's policy. The
 passes after it skip the class until that view changes (a target joins or comes back, a
-hold ends), `StuckRetry` (10 min) passes, or a sweep visits it. A failed attempt (a PUT
+hold ends, a probe shows room), `StuckRetry` (10 min) passes, or a sweep visits it. A
+failed attempt (a PUT
 refused or cut, a read that failed, a migration short of k acks, a commit that lost a
-race) is retried on the next pass as before. Without this, a dead disk with no spare
-would have every pass visit every chunk on it for nothing.
+race) is retried on the next pass as before; a PUT refused for space marks its target
+full, so the next pass plans around it and, with nothing else to try, goes stuck. Without
+this, a dead disk with no spare
+would have every pass visit every chunk on it for nothing. `status` and `check` carry the
+last pass's `no_room` count and name the full targets (`repair.no_room_on`), and warn
+with them in place of the generic under-replicated line (I-421).
 
 ## 5. Scrub
 
@@ -450,6 +468,9 @@ state to patch.
 - **I-41** — A tombstoned chunk re-referenced before GC is revived without re-upload, and its `Refs` is exact.
 - **I-42** — Draining a node moves every one of its slots before `node remove` succeeds without `--force`; after removal no committed placement references the node except via `--force`-acknowledged degraded slots.
 - **I-418** — `node remove --force` of a host removes its disks (each with every slot zeroed) and its mirrors with it, then the host; the zeroing proposes `RemoveWorkers` chunks at a time and only for the chunks that still name the disk, so a run cut short is finished by running it again with no slot proposed for twice; the call carries no client deadline of its own.
+- **I-419** — A repair plans before it reads: a target marked full by an `ErrFull` answer within `FullHold` or without room for the shard by its last probe is no candidate for a refill, home or not; a chunk whose plan gives no slot a new target is neither fetched nor uploaded and is counted `no_room`, so its class goes stuck until a target has room.
+- **I-420** — A node refuses a shard PUT its store cannot hold by the request's announced length, before the body is read and before a slot is taken; a background PUT sends `Expect: 100-continue`, so the refused shard never leaves the sender.
+- **I-421** — `status` and `check` report the last pass's `no_room` count and the full targets by name, and warn with them in place of the generic under-replicated line while degraded chunks wait on a full target.
 - **I-43** — `GCDelete` applied on any replica deletes exactly the same chunk entries (determinism via `Before` in the command).
 - **I-44** — `fsck` reports zero findings on a cluster where every test in this document passed; any finding is a bug, not noise.
 - **I-65** — A repair pass never lowers the number of readable slots of a chunk and never proposes a placement equal to the committed one: a slot whose shard is still readable (a live draining node) stays in the placement until a replacement is placed, a live draining holder counts toward the `≥ k` readability test, and a pass that could improve nothing proposes nothing.
@@ -535,5 +556,8 @@ state to patch.
 | I-378 | `TestClasses_RepresentativeMatchesEveryMember`, `TestScanHealth_FromClassesMatchesEveryChunk` |
 | I-379 | `TestRepair_HomeReturns_SweepsAndMovesHome`, `TestRepair_PassVisitsOnlyWhereWorkIs`, `TestRepair_ScrubPeriod_CoversEveryChunkOnce`, `TestRepair_RefillGoesHome_Table` |
 | I-380 | `TestRepair_StuckClassWaitsForTheView`, `TestRepair_PutFails_Retries` |
+| I-419 | `TestRepair_NoRoom_PlansBeforeRead`, `TestRepair_FullMark_ExcludesTarget`, `TestRepair_RoomThreshold_Table`, `TestRepair_FullSpare_NoReadsNoPuts` |
+| I-420 | `TestStore_Fits_Table`, `TestChunkRPC_FullNodeIs507`, `TestChunkRPC_FullNodeIs507_NoBodySent`, `TestClient_ExpectContinue_BackgroundPutOnly` |
+| I-421 | `TestStatus_WarnsFullTargetsBlockRepair` |
 | I-195 | `TestWebUI_Ls_HidesTailraidTree`; `TestStub_I_195` (planned with the trash of docs/02: TestVFS_TailraidTree_IsEphemeral) |
 | I-182 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestSchedule_TakesAndThins_Table`, `TestSchedule_OfflineMirrorNothingHeld_CatchUpOnAttach`, `TestSchedule_ThinThenSweep`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestConfig_Mirrors`, `TestSchedule_AutoNameTaken_NoRetry`, `TestSchedule_SkipsWhileCodecOld` |

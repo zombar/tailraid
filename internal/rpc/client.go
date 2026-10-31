@@ -77,6 +77,7 @@ func NewClient(clusterID [16]byte, resolve Resolver) *Client {
 		MaxIdleConnsPerHost:   32,                        // a flush fans out up to k+m PUTs per chunk on Config.Workers chunks at once
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
+		ExpectContinueTimeout: ExpectContinue, // a background PUT's body waits for the node's 100 Continue (I-420)
 	}
 	// no whole-request timeout on the client: a shard call's deadline scales with its
 	// size (callTimeout), the rest get callTimeout(0); ResponseHeaderTimeout bounds a
@@ -89,6 +90,11 @@ func NewClient(clusterID [16]byte, resolve Resolver) *Client {
 	ctl := &http.Transport{DialContext: controlDialer().DialContext, MaxIdleConnsPerHost: 32, IdleConnTimeout: 90 * time.Second}
 	return &Client{http: &http.Client{Transport: tr}, ctl: &http.Client{Transport: ctl}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, grace: 10 * time.Minute, clk: clock.Real()}
 }
+
+// ExpectContinue is how long a background PUT waits for the node's 100 Continue before
+// sending its body anyway: longer than a node holds a PUT for a slot (SlotWait), so a
+// queued request is not sent twice over (I-420).
+const ExpectContinue = 5 * time.Second
 
 // transferRate is the slowest tailnet path a shard transfer is given: a DERP relay at
 // 256 KiB/s moves a 64 MiB shard in about four minutes.
@@ -155,6 +161,12 @@ func (c *Client) do(ctx context.Context, method, addr, path string, body []byte,
 	}
 	if chunk.IsBackground(ctx) {
 		req.Header.Set(HeaderPriority, PriorityBackground) // the repairer's work yields slots (I-175)
+		if method == http.MethodPut && body != nil {
+			// the body follows the node's 100 Continue: a node without room answers 507
+			// first and the shard never leaves this host (I-420); a client's flush keeps
+			// its round trip
+			req.Header.Set("Expect", "100-continue")
+		}
 	}
 	if body != nil {
 		req.ContentLength = int64(len(body))

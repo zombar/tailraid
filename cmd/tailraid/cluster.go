@@ -173,6 +173,9 @@ func printStatus(w io.Writer, r admin.Report) {
 		if l := homeLine(r.Repair.Home); l != "" {
 			fmt.Fprintln(w, l)
 		}
+		if len(r.Repair.NoRoomOn) > 0 {
+			fmt.Fprintf(w, "repair  %d chunks wait on full targets: %s\n", r.Repair.Stats.NoRoom, strings.Join(r.Repair.NoRoomOn, ", "))
+		}
 	}
 	if l := admin.StagedLine(r.Gateway); l != "" {
 		fmt.Fprintf(w, "staged  %s\n", l) // not yet spread to the cluster (docs/04 §3, I-398)
