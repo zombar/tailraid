@@ -2,6 +2,16 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.11.1 (2026-10-31)
+
+### Changes
+
+- repair: a pass reads the policy per chunk (I-417) ([0769c69](https://github.com/zombar/tailraid/commit/0769c69))
+- build: Go 1.27.3 (GO-2026-6809 in crypto/x509) ([1155294](https://github.com/zombar/tailraid/commit/1155294))
+- repair: the pass plans before it reads; a full target refuses before the body (I-419..I-421) ([f8f5ea4](https://github.com/zombar/tailraid/commit/f8f5ea4))
+- membership: a dead host goes with one forced remove (I-418) ([e281b39](https://github.com/zombar/tailraid/commit/e281b39))
+- readme: redundancy by example ([adc3dba](https://github.com/zombar/tailraid/commit/adc3dba))
+
 ## v0.11.0 (2026-10-18)
 
 ### Changes
