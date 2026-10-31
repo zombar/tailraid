@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -218,10 +220,29 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 	switch op.Op {
 	case "remove":
 		if nd.State != meta.Removed {
+			if op.Force && nd.Kind == meta.KindDevice {
+				// a host dead for good goes with one command: each of its disks is
+				// removed with its slots zeroed, its mirrors with it, then the host (I-418)
+				rows := n.FSM.Nodes()
+				for i := range rows {
+					row := &rows[i]
+					if row.Host != op.NodeIdx || row.State == meta.Removed || (row.Kind != meta.KindDisk && row.Kind != meta.KindMirror) {
+						continue
+					}
+					if row.Kind == meta.KindDisk {
+						if err := n.zeroSlots(ctx, row.Idx, propose); err != nil {
+							return err
+						}
+					}
+					if err := propose(meta.Command{Op: meta.OpNodeSetState, NodeSetState: &meta.NodeSetState{Idx: row.Idx, State: meta.Removed, Now: time.Now().UnixNano()}}); err != nil {
+						return fmt.Errorf("remove %s with its host: %w", row.Name, err)
+					}
+				}
+			}
 			if op.Force {
 				// make the degradation explicit: zero every slot on the node, then the
 				// repairer fills them from the other copies (docs/02, L-96)
-				if err := n.zeroSlots(op.NodeIdx, propose); err != nil {
+				if err := n.zeroSlots(ctx, op.NodeIdx, propose); err != nil {
 					return err
 				}
 			} else if held := n.SlotsHeldBy(op.NodeIdx); held > 0 {
@@ -359,7 +380,16 @@ func (n *Node) diskName(op rpc.MemberOp) string {
 }
 
 // zeroSlots proposes SetPlacement with slot 0 for every chunk that places a shard on idx.
-func (n *Node) zeroSlots(idx meta.NodeIdx, propose func(meta.Command) error) error {
+// RemoveWorkers is how many slot-zeroing proposals a forced remove keeps in flight: a
+// proposal waits two Raft round trips, so one at a time would take hours over a tailnet
+// for a disk of some hundred thousand slots (I-418).
+const RemoveWorkers = 64
+
+// zeroSlots zeroes every placement slot on idx (`node remove --force`, L-96), one
+// SetPlacement per chunk, RemoveWorkers at a time. Only the chunks that still name idx
+// are proposed for, so a run cut short (a leadership change) is finished by running it
+// again; a chunk re-placed meanwhile answers ErrConflict and is skipped (I-102).
+func (n *Node) zeroSlots(ctx context.Context, idx meta.NodeIdx, propose func(meta.Command) error) error {
 	var victims []meta.Chunk
 	n.FSM.ForEachChunk(func(c meta.Chunk) bool {
 		if slices.Contains(c.Placement, idx) {
@@ -367,22 +397,59 @@ func (n *Node) zeroSlots(idx meta.NodeIdx, propose func(meta.Command) error) err
 		}
 		return true
 	})
-	for _, c := range victims {
-		place := append([]meta.NodeIdx(nil), c.Placement...)
-		for i, s := range place {
-			if s == idx {
-				place[i] = 0
-			}
-		}
-		err := propose(meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: c.K, M: c.M, Placement: place, Expect: c.Placement}})
-		if errors.Is(err, meta.ErrConflict) {
-			continue // re-placed meanwhile (I-102): whatever landed no longer names idx, or the repairer will see it
-		}
-		if err != nil {
-			return fmt.Errorf("zero slots of %x: %w", c.Hash[:8], err)
-		}
+	if len(victims) == 0 {
+		return nil
 	}
-	return nil
+	n.log.Info("zeroing slots of a removed node", "node", idx, "chunks", len(victims))
+	var (
+		wg      sync.WaitGroup
+		sem     = make(chan struct{}, RemoveWorkers)
+		mu      sync.Mutex
+		first   error
+		done    atomic.Int64
+		nextLog = int64(10_000)
+	)
+	for _, c := range victims {
+		mu.Lock()
+		failed := first != nil
+		mu.Unlock()
+		if failed || ctx.Err() != nil {
+			break
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(c meta.Chunk) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			place := append([]meta.NodeIdx(nil), c.Placement...)
+			for i, s := range place {
+				if s == idx {
+					place[i] = 0
+				}
+			}
+			err := propose(meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: c.K, M: c.M, Placement: place, Expect: c.Placement}})
+			if errors.Is(err, meta.ErrConflict) {
+				err = nil // re-placed meanwhile (I-102): whatever landed no longer names idx, or the repairer will see it
+			}
+			if err != nil {
+				mu.Lock()
+				if first == nil {
+					first = fmt.Errorf("zero slots of %x: %w", c.Hash[:8], err)
+				}
+				mu.Unlock()
+				return
+			}
+			if d := done.Add(1); d >= atomic.LoadInt64(&nextLog) {
+				atomic.AddInt64(&nextLog, 10_000)
+				n.log.Info("zeroing slots of a removed node", "node", idx, "done", d, "of", len(victims))
+			}
+		}(c)
+	}
+	wg.Wait()
+	if first != nil {
+		return first
+	}
+	return ctx.Err()
 }
 
 // raftErr maps Raft's leadership errors onto the not-leader sentinel so RPC callers get
