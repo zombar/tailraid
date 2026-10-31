@@ -378,6 +378,18 @@ for those shards); then `NodeSetState{Removed}` is committed and `raft.RemoveSer
 (02). Removed nodes keep their `NodeIdx` forever (indexes are never reused) so historical
 placements stay interpretable.
 
+**A host dead for good (I-418).** `node remove <host> --force` is one command: each of the
+host's disks is removed with its slots zeroed, its mirrors with it, then the host and its
+Raft seat. The zeroing is one `SetPlacement` per chunk, `RemoveWorkers` (64) in flight at
+once rather than one round trip after another (a disk of a quarter million slots would
+otherwise take hours over a tailnet, under the member lock, and die with the first
+leadership change); the leader logs its progress every 10k chunks. Only the chunks that
+still name the disk are proposed for, so a run cut short is finished by running the
+command again, which proposes for nothing twice; a chunk re-placed meanwhile answers
+`ErrConflict` and is skipped (I-102). The client gives the call no deadline of its own, as
+a pass op (I-189). The zeroed slots are case 1 above: the repairer refills them as soon as
+a target with room exists.
+
 **`node add` / `join`** → `NodeUpsert{State: Active}`; the node is a candidate for new
 chunks at once. Data moves toward it only through home placement (14 §7): the chunks whose home now
 includes the new target, about its weight over the total, become away, cap-breaking ones
@@ -437,6 +449,7 @@ state to patch.
 - **I-15** — Repair restores k+m slots for any chunk with ≥ k good live shards, and migration to a new (k,m) never passes through a state in which fewer than k shards decodable under the committed placement exist.
 - **I-41** — A tombstoned chunk re-referenced before GC is revived without re-upload, and its `Refs` is exact.
 - **I-42** — Draining a node moves every one of its slots before `node remove` succeeds without `--force`; after removal no committed placement references the node except via `--force`-acknowledged degraded slots.
+- **I-418** — `node remove --force` of a host removes its disks (each with every slot zeroed) and its mirrors with it, then the host; the zeroing proposes `RemoveWorkers` chunks at a time and only for the chunks that still name the disk, so a run cut short is finished by running it again with no slot proposed for twice; the call carries no client deadline of its own.
 - **I-43** — `GCDelete` applied on any replica deletes exactly the same chunk entries (determinism via `Before` in the command).
 - **I-44** — `fsck` reports zero findings on a cluster where every test in this document passed; any finding is a bug, not noise.
 - **I-65** — A repair pass never lowers the number of readable slots of a chunk and never proposes a placement equal to the committed one: a slot whose shard is still readable (a live draining node) stays in the placement until a replacement is placed, a live draining holder counts toward the `≥ k` readability test, and a pass that could improve nothing proposes nothing.
@@ -509,7 +522,8 @@ state to patch.
 | I-14 | `TestChunkRPC_DeleteFence`, `TestCluster_GCDoesNotDeleteInflightUpload`, `TestFlusher_LateRetry_RePutsBeforeCommit`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep`, `TestGC_LeaderClockBehind_DoesNotStallGC`, `TestStore_DeleteIfOlder_RefusesYoungShard`, `TestSweep_YoungShardKept` |
 | I-15 | `TestModelCheck_Long`, `TestRepair_DeadNodeHoldDown_ThenReplaced`, `TestRepair_FillsDegradedSlotsWhenSpareAppears`, `TestRepair_MigrationCrash_Resumes`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK`, `TestRepair_SmallChunk_SetRedundancy_Migrates` |
 | I-41 | `TestFSM_Revive` |
-| I-42 | `TestCluster_JoinDrainRemove`, `TestRepair_DrainMovesAllSlotsBeforeRemove` |
+| I-42 | `TestCluster_JoinDrainRemove`, `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestMembership_ForceRemove_DeadHost_Cascades` |
+| I-418 | `TestMembership_ForceRemove_DeadHost_Cascades`, `TestClient_ForceRemove_NoDeadline` |
 | I-43 | `TestFSM_DeterministicAcrossReplicas` |
 | I-44 | `TestCheck_MPlusOneCorrupt_NotOK`, `TestFsck_CleanClusterNoFindings`, `TestFsck_CountsOrphanShards` |
 | I-65 | `TestRepair_DeadWithinFillAfter_NoRepeatProposal`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable`, `TestRepair_Migration_WithinCap_VoterHostDisks` |

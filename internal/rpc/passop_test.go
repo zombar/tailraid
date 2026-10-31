@@ -80,3 +80,45 @@ func TestAdminOp_IsPass_Table(t *testing.T) {
 		}
 	}
 }
+
+// A forced remove zeroes every slot of the node first, one proposal per chunk, so the
+// call lasts as long as that takes: the client gives it no deadline of its own, the
+// caller's context alone bounds it, as a pass op (I-189). Every other member op keeps
+// the call's deadline.
+// Invariant: I-418
+func TestClient_ForceRemove_NoDeadline(t *testing.T) {
+	type seen struct {
+		deadline bool
+	}
+	var got seen
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer hs.Close()
+	addr := hs.Listener.Addr().String()
+	c := NewClient([16]byte{1}, func(meta.NodeIdx) (string, bool, bool) { return addr, false, true })
+	c.WrapTransport(func(rt http.RoundTripper) http.RoundTripper {
+		return roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			_, got.deadline = r.Context().Deadline()
+			return rt.RoundTrip(r)
+		})
+	})
+	for _, tc := range []struct {
+		op   MemberOp
+		want bool
+	}{
+		{MemberOp{Op: "remove", NodeIdx: 2}, true},
+		{MemberOp{Op: "set_state", NodeIdx: 2, State: meta.Draining}, true},
+		{MemberOp{Op: "remove", NodeIdx: 2, Force: true}, false},
+	} {
+		got = seen{}
+		if err := c.Members(ctx, addr, tc.op); err != nil {
+			t.Fatalf("%+v: %v", tc.op, err)
+		}
+		if got.deadline != tc.want {
+			t.Errorf("%s force=%v: request deadline %v, want %v", tc.op.Op, tc.op.Force, got.deadline, tc.want)
+		}
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

@@ -265,7 +265,7 @@ daemon tells the operator when the disk under it is not encrypted.
 | Corrupt or forged shard body | receiver hashes the body once, verifies `X-Shard-SHA256` and stores that sum in the shard header (`PutVerified`); reader verifies decoded chunk hash |
 | Oversized body exhausts memory/disk | `MaxBytesReader(shardMax+1)`, PUT semaphore, 507 on no space |
 | A peer stalls mid-body and holds a PUT or GET slot | per-request body deadline derived from the transfer size (I-97) |
-| An admin op runs a pass longer than a shard call's header timeout | the client's control-plane transport has no response-header timeout, and a pass op (`repair_now`, `gc_now`, `index_now`, `check` with a scrub, `trash_purge` of the whole trash, the scrape's plan, and a revert or copy from a mirror) is bounded by the caller's context alone; shard calls keep the 10 s header timeout (I-189) |
+| An admin op runs a pass longer than a shard call's header timeout | the client's control-plane transport has no response-header timeout, and a pass op (`repair_now`, `gc_now`, `index_now`, `check` with a scrub, `trash_purge` of the whole trash, the scrape's plan, a revert or copy from a mirror, and a `node remove --force`, which zeroes a slot per proposal first, I-418) is bounded by the caller's context alone; shard calls keep the 10 s header timeout (I-189) |
 | LAN host reaches NFS, SMB or RPC | NFS and SMB bound to loopback; RPC bound to Tailscale IP only |
 | `/dev/*` abuse | only with `dev.enabled`; member-authorized; flagged in `status` |
 | Guest, other-user or tagged tailnet device opens the web UI | member-or-same-user WhoIs rule; tagged devices have no login (docs/13, I-68) |

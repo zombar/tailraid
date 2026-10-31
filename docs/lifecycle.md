@@ -101,7 +101,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-93 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-80 node drain | Degraded (migration) | `TestCluster_JoinDrainRemove`, `TestFSM_NodeStates`, `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |
 | L-94 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (drain) | relocation done | Committed; old shards Relocated → Deleted | `TestRepair_DrainMovesAllSlotsBeforeRemove` |
 | L-95 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (any slot on node) | E-81 node remove | Committed | `TestCluster_JoinDrainRemove`, `TestFSM_NodeRemove_RefusedWhileHoldingSlots` |
-| L-96 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-82 node remove --force | Degraded | `TestCluster_JoinDrainRemove`, `TestFSM_NodeRemove_RefusedWhileHoldingSlots`, `TestJoin_TokenAndIdentity` |
+| L-96 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-82 node remove --force | Degraded | `TestCluster_JoinDrainRemove`, `TestFSM_NodeRemove_RefusedWhileHoldingSlots`, `TestJoin_TokenAndIdentity`, `TestMembership_ForceRemove_DeadHost_Cascades` |
 | L-97 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-83 join | Committed | `TestFSM_NodeStates` |
 | L-98 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-84 set-capacity | Committed | `TestCluster_SetCapacityDoesNotMoveData` |
 | L-99 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-85 IP change | Committed | `TestCluster_UpdateAddr_ChangesRPCAddr` |
