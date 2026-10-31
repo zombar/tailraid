@@ -33,6 +33,7 @@ type ShardStore interface {
 	Get(k chunk.ShardKey) ([]byte, error) // the verified payload (the self path of Client.Get)
 	Open(k chunk.ShardKey) (io.ReadCloser, int64, error)
 	PutVerified(k chunk.ShardKey, payload []byte, sum [32]byte) (int64, error) // sum = sha256(payload), verified by the caller
+	Fits(k chunk.ShardKey, payload int64) bool                                 // would a PUT of payload bytes pass the capacity check now (I-420)
 	Has(k chunk.ShardKey) bool
 	DeleteIfOlder(k chunk.ShardKey, minAge time.Duration, now time.Time) (bool, int64, error)
 	Used() int64
@@ -531,15 +532,21 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 		_, _ = io.Copy(w, rc)
 	case http.MethodPut:
 		s.noteForeground(r)
+		if r.ContentLength > s.o.MaxShard {
+			writeErr(w, http.StatusRequestEntityTooLarge, "shard too large")
+			return
+		}
+		if r.ContentLength >= 0 && !store.Fits(key, r.ContentLength) {
+			// refused before the body, and before a slot: a sender that asked to continue
+			// never sends it (I-420); the reservation in PutVerified still decides
+			writeErr(w, http.StatusInsufficientStorage, "no space")
+			return
+		}
 		release, ok := s.take(w, r, slots(r, s.bgPutSem, s.putSem)...)
 		if !ok {
 			return
 		}
 		defer release()
-		if r.ContentLength > s.o.MaxShard {
-			writeErr(w, http.StatusRequestEntityTooLarge, "shard too large")
-			return
-		}
 		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(s.o.BodyTimeout))    // a stalled body frees the slot (I-97)
 		buf := bytes.NewBuffer(make([]byte, 0, max(0, min(r.ContentLength, s.o.MaxShard))+1)) // sized by Content-Length: one allocation
 		_, err := buf.ReadFrom(http.MaxBytesReader(w, r.Body, s.o.MaxShard))

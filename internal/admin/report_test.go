@@ -1,7 +1,9 @@
 package admin_test
 
 import (
+	"context"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/ec"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/s3/s3test"
 	"github.com/zombar/tailraid/internal/testharness"
 )
@@ -187,5 +190,81 @@ func TestReport_S3NodeStoredBytes(t *testing.T) {
 	b, err := json.Marshal(rep)
 	if err != nil || !strings.Contains(string(b), `"stored_bytes"`) {
 		t.Fatalf("stored_bytes missing from the JSON: %v", err)
+	}
+}
+
+// While degraded chunks wait on a target without room, the leader's report says so: the
+// last pass's no_room count, the full targets by name, and a warning naming them in
+// place of the generic under-replicated line.
+// Invariant: I-421
+func TestStatus_WarnsFullTargetsBlockRepair(t *testing.T) {
+	c := testharness.NewCluster(t, 4, 2, 1)
+	defer c.Close()
+	leader := c.Leader()
+	spare := (leader.I + 1) % 4
+	c.Kill(spare)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	c.WriteFile(leader.I, "/f", testharness.Pattern(int(testharness.ChunkSize), 68))
+	c.Settle()
+	ch := c.ChunksOf(leader.I, "/f")[0]
+	victim := -1
+	for i, nd := range c.Nodes {
+		if i != leader.I && i != spare && slices.Contains(ch.Placement, nd.Target()) {
+			victim = i
+			break
+		}
+	}
+	c.Kill(victim)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	c.Clk.Advance(cluster.FillAfter)
+	c.Probe()
+	c.Restart(spare)
+	c.Nodes[spare].Store.SetCapacity(1)
+	c.Settle()
+	cfg := repair.DefaultConfig()
+	cfg.ScrubPeriod, cfg.RateBytes = 0, 0
+	r := repair.New(leader.Node.FSM, leader.Node, leader.Prober, leader.Client, leader.Reader, c.Clk, cfg, nil)
+	r.Room = leader.Prober.Free
+	if _, err := r.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rep := admin.Build(leader.Node, leader.Prober, c.CID, c.Clk, r)
+	spareName := ""
+	for _, n := range rep.Nodes {
+		if n.Idx == c.Nodes[spare].Target() {
+			spareName = n.Name
+		}
+	}
+	if rep.Repair == nil || rep.Repair.Stats.NoRoom != 1 || !slices.Equal(rep.Repair.NoRoomOn, []string{spareName}) {
+		t.Fatalf("repair %+v, want no_room 1 on %q", rep.Repair, spareName)
+	}
+	named := false
+	for _, w := range rep.Warnings {
+		if strings.Contains(w, "once a live spare exists") {
+			t.Fatalf("the generic line beside a full target: %q", w)
+		}
+		named = named || (strings.Contains(w, spareName) && strings.Contains(w, "full target"))
+	}
+	if !named {
+		t.Fatalf("no warning names the full target %q: %v", spareName, rep.Warnings)
+	}
+	if w := admin.NoRoomWarning(0, nil); w != "" {
+		t.Fatalf("a warning with nothing waiting: %q", w)
+	}
+	b, err := json.Marshal(rep)
+	if err != nil || !strings.Contains(string(b), `"no_room":1`) || !strings.Contains(string(b), `"no_room_on":["`+spareName+`"]`) {
+		t.Fatalf("json: %v %s", err, b)
+	}
+	// room appears: the next report is back to the generic state of a healthy volume
+	c.Nodes[spare].Store.SetCapacity(1 << 40)
+	c.Probe()
+	if _, err := r.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rep = admin.Build(leader.Node, leader.Prober, c.CID, c.Clk, r)
+	if rep.Repair.Stats.NoRoom != 0 || len(rep.Repair.NoRoomOn) != 0 {
+		t.Fatalf("after room appeared: %+v", rep.Repair)
 	}
 }

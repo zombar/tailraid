@@ -768,3 +768,53 @@ func FuzzStore_PutGet(f *testing.F) {
 		}
 	})
 }
+
+// Fits is the capacity check of PutVerified without its reservation: a payload fits while
+// used + header + payload stays within the budget, a copy of the same key already stored
+// gives its size back, and a store without a budget fits everything (I-420).
+// Invariant: I-420
+// Lifecycle: L-138
+func TestStore_Fits_Table(t *testing.T) {
+	const capacity = 1000
+	room := int64(capacity - HeaderSize) // the largest payload an empty store takes
+	for _, tc := range []struct {
+		name    string
+		payload int64
+		fits    bool
+	}{
+		{"0", 0, true}, {"1", 1, true}, {"room-1", room - 1, true}, {"room", room, true}, {"room+1", room + 1, false}, {"2*room", 2 * room, false},
+	} {
+		s := openStore(t, sysfs.OS{}, t.TempDir(), capacity)
+		if got := s.Fits(keyFor([]byte("x"), 0), tc.payload); got != tc.fits {
+			t.Errorf("empty store, payload %s: fits %v, want %v", tc.name, got, tc.fits)
+		}
+	}
+	// a stored copy of the key is replaced: its bytes come back, another key's do not
+	s := openStore(t, sysfs.OS{}, t.TempDir(), capacity)
+	p := bytes.Repeat([]byte{7}, 600)
+	k := keyFor(p, 0)
+	if _, err := s.Put(k, p); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		key     ShardKey
+		payload int64
+		fits    bool
+	}{
+		{"same key, same size", k, 600, true},
+		{"same key, the whole budget", k, room, true},
+		{"same key, past the budget", k, room + 1, false},
+		{"other key, what is left", keyFor([]byte("y"), 0), room - 600 - HeaderSize, true},
+		{"other key, one more", keyFor([]byte("y"), 0), room - 600 - HeaderSize + 1, false},
+	} {
+		if got := s.Fits(tc.key, tc.payload); got != tc.fits {
+			t.Errorf("%s: fits %v, want %v", tc.name, got, tc.fits)
+		}
+	}
+	// no budget: everything fits
+	free := openStore(t, sysfs.OS{}, t.TempDir(), 0)
+	if !free.Fits(k, 1<<40) {
+		t.Fatal("a store without a budget refused a payload")
+	}
+}

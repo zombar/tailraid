@@ -49,7 +49,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-41 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-34 PUT fails after retry, acks ≥ k | Placed(n<k+m) | `TestFlusher_DegradedCommitRecordsZeroSlots`, `TestFlusher_LiveEqualsK_CommitsDegraded`, `TestFlusher_PutTimeout_SlotReplaced` |
 | L-42 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-34 acks < k | Dirty | `TestFlusher_FewerThanKAcks_StaysDirty` |
 | L-43 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-35 PUT timeout | as E-34 | `TestFlusher_PutTimeout_SlotReplaced` |
-| L-44 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-36 507 ENOSPC | as E-34 (node excluded this flush) | `TestChunkRPC_FullNodeIs507`, `TestFlusher_FullNodeExcluded` |
+| L-44 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-36 507 ENOSPC | as E-34 (node excluded this flush) | `TestChunkRPC_FullNodeIs507`, `TestChunkRPC_FullNodeIs507_NoBodySent`, `TestFlusher_FullNodeExcluded` |
 | L-45 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-37 400 hash mismatch | Uploading (retry once same node) | `TestChunkRPC_HashMismatchRejected`, `TestChunkRPC_PutGetHeadDelete_SizeBoundaries` |
 | L-46 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-38 403 | as E-34 | `TestFlusher_PutForbidden_SlotReplaced` |
 | L-47 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-39 409 cluster-id | as E-34 | `TestIDStream_RejectsForeignCluster` |
@@ -143,7 +143,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-135 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (orphan, old) | Sweep | Swept | `TestSweep_OldUnknownDeleted` |
 | L-136 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | duplicate PUT | Durable | `TestStore_ConcurrentPutSameHash`, `TestStore_DupPutRefreshesMtime`, `TestStore_PutDifferentPayloadSameKey_Replaces` |
 | L-137 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (placed on self) | E-44 DELETE for a placed key | Durable | `TestChunkRPC_DeleteFence` |
-| L-138 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | PUT with capacity exceeded | Durable (new one rejected) | `TestStore_ConcurrentPutsNearCapacity_NeverExceed` |
+| L-138 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | PUT with capacity exceeded | Durable (new one rejected) | `TestChunkRPC_FullNodeIs507`, `TestStore_ConcurrentPutsNearCapacity_NeverExceed`, `TestStore_Fits_Table` |
 | L-139 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (S3) | object deleted externally | (missing) | `TestS3Node_ObjectMissing_Repaired` |
 | L-140 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | scrub sample | Verified | `TestChunkDescribe_StateFilesAndEvents` |
 | L-141 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | GCDelete | Collected | `TestFSM_GCDelete_Boundary` |
@@ -227,3 +227,4 @@ exactly one design doc transition table and cited by at least one test via
 | L-219 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-122 WRITE at a cap, the inode's last flush attempt failed for any other reason (no leader, a leader restarting, too few acks while peers restart, a propose timeout, a codec refusal) | Dirty | `TestOverlay_WALCap_WaitsBehindTransientFlushFailure` |
 | L-220 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a slot away from its home, the home target dead, suspect or full) | repair pass, gate open or closed | Committed | `TestHomeMoves_Idempotent`, `TestHomeMoves_Table`, `TestRepair_Home_Gate_Table` |
 | L-222 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | E-136 | Durable (its host held slow) | `TestFlusher_SlowNodeHeldFromNextChunk`, `TestProber_SlowHold_DoublesCapsResets`, `TestRepair_SlowHostNotADestination` |
+| L-223 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (a bad slot; every spare marked full or without room for the shard) | repair pass | Degraded | `TestRepair_FullMark_ExcludesTarget`, `TestRepair_FullSpare_NoReadsNoPuts`, `TestRepair_NoRoom_PlansBeforeRead` |

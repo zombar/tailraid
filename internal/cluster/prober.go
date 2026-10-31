@@ -583,6 +583,36 @@ func (p *Prober) IsLive(idx meta.NodeIdx) bool {
 	return p.probedLive(idx)
 }
 
+// Free is a disk's free bytes by its last good probe, or by this host's own health for
+// an own disk (docs/14 §4): the repairer's Room (I-419). Known only for a disk row with
+// a successful probe that is not dead; a device, a bucket, a mirror and an unprobed row
+// are unknown, and count as having room.
+func (p *Prober) Free(idx meta.NodeIdx) (int64, bool) {
+	nd, found := p.node.nodeByIdx(idx)
+	if !found || nd.Kind != meta.KindDisk {
+		return 0, false
+	}
+	if self, ok := p.node.SelfIdx(); ok && nd.Host == self && (p.SelfDisks != nil || p.SelfHealth != nil) {
+		disks := p.SelfDisks
+		if disks == nil {
+			disks = func() []rpc.DiskHealth { return p.SelfHealth().Disks }
+		}
+		for _, dh := range disks() {
+			if dh.ID == nd.ID {
+				return dh.Free, dh.OK
+			}
+		}
+		return 0, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pr, ok := p.probes[idx]
+	if !ok || pr.LastOK.IsZero() || !pr.DeadSince.IsZero() {
+		return 0, false
+	}
+	return pr.Free, true
+}
+
 // probedLive is IsLive by the probes alone, without the suspect mark: a shard call that
 // timed out routes traffic around its host for a probe interval, but a mirror on it is
 // still attached, so MirrorOnline follows this (docs/16 §1, I-188).

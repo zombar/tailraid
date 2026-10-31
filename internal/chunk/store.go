@@ -137,6 +137,23 @@ func (s *Store) Capacity() int64 { return s.capacity.Load() }
 // next one is refused (ErrFull) until the sweep or a delete makes room.
 func (s *Store) SetCapacity(n int64) { s.capacity.Store(max(n, 0)) }
 
+// Fits reports whether a PUT of payload bytes under k would pass the capacity check now:
+// the arithmetic of PutVerified without its reservation, so a node refuses a shard it
+// cannot hold before the body is sent (I-420). A copy of the key already stored is
+// replaced, so its size is given back. The answer is a look, not a promise: the
+// reservation in PutVerified decides.
+func (s *Store) Fits(k ShardKey, payload int64) bool {
+	capacity := s.capacity.Load()
+	if capacity == 0 {
+		return true
+	}
+	var oldSize int64
+	if fi, err := s.fsys.Stat(s.path(k)); err == nil && !fi.IsDir() {
+		oldSize = fi.Size()
+	}
+	return s.used.Load()-oldSize+HeaderSize+payload <= capacity
+}
+
 // Has reports whether a shard file is visible under its final name.
 // Path returns the on-disk path of a shard key (used by scrub tooling and tests).
 func (s *Store) Path(k ShardKey) string { return s.path(k) }

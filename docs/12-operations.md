@@ -414,7 +414,12 @@ chunks, `in_flight` of `workers`, `bytes_moved` (06 §4, I-174). `tailraid statu
 it as one line (`repair  pass 3 running: 12345/106452 scanned, 4 in flight of 4 workers,
 1.2 GiB moved, started 06:01:19`), `check` carries it next to `scan`, and the dashboard's
 integrity panel shows it above the last pass's counters, so a first pass over a large
-backlog is visible as progress rather than read as a stall. `repair.workers` (1..64,
+backlog is visible as progress rather than read as a stall. `stats.no_room` counts the
+chunks the pass could place nowhere because every spare was full or without room (06
+§4, I-419), `repair.no_room_on` names those targets, `status` prints `repair  N chunks
+wait on full targets: …` and both `status` and `check` warn `N degraded chunks wait on a
+full target (…)` in place of the generic under-replicated line (I-421): the way out is
+room on that target, a disk added, or its budget raised. `repair.workers` (1..64,
 default 4) and `repair.rate` (a size a second, `0` for no limit, default 50M) in the config
 set the fan-out and the byte rate, and `repair.scrub_period` (a duration of 1h to 8760h,
 `0` for no background scrub, default 168h, a week) how long the background scrub takes to verify the

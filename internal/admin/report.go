@@ -4,6 +4,7 @@ package admin
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -326,6 +327,27 @@ type RepairStatus struct {
 	Reported   int                `json:"reported_bad_slots"`
 	InProgress *repair.Progress   `json:"in_progress,omitempty"` // the pass under way, if any (docs/12 §8)
 	Home       *repair.HomeStatus `json:"home,omitempty"`        // the home gate and what is away (docs/14 §7)
+	NoRoomOn   []string           `json:"no_room_on,omitempty"`  // live targets the last pass could not refill onto: full (I-421)
+}
+
+// NoRoomWarning is the warning `status` and `check` print while degraded chunks wait on
+// targets without room (I-421): n chunks, the targets by name.
+func NoRoomWarning(n int, names []string) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d degraded chunks wait on a full target (%s): repair resumes once it has room (free space there, add a disk, or raise its budget)", n, strings.Join(names, ", "))
+}
+
+// TargetNames resolves target indexes to names in index order.
+func TargetNames(nodes []meta.Node, idxs []meta.NodeIdx) []string {
+	var out []string
+	for i := range nodes {
+		if slices.Contains(idxs, nodes[i].Idx) {
+			out = append(out, nodes[i].Name)
+		}
+	}
+	return out
 }
 
 // Build assembles the report from the local FSM and prober view; rep may be nil.
@@ -429,6 +451,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		}
 		home := rp.Home()
 		rep.Repair.Home = &home
+		rep.Repair.NoRoomOn = TargetNames(nodes, rp.NoRoomTargets())
 	}
 	markDisks(rep.Nodes)
 	rep.Warnings = warnings(rep)
@@ -539,7 +562,10 @@ func warnings(r Report) []string {
 			w = append(w, "node "+r.Nodes[i].Name+" has the /dev/* endpoints enabled (dev.enabled): test rigs only")
 		}
 	}
-	if r.Volume.Degraded > 0 {
+	switch {
+	case r.Repair != nil && r.Repair.Stats.NoRoom > 0:
+		w = append(w, NoRoomWarning(r.Repair.Stats.NoRoom, r.Repair.NoRoomOn))
+	case r.Volume.Degraded > 0:
 		w = append(w, "some chunks are under-replicated; repair fills them once a live spare exists")
 	}
 	w = append(w, sharedDiskWarnings(r.Nodes)...)
