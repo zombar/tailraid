@@ -595,3 +595,135 @@ func TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO(t *testing.T) {
 		t.Fatal("corrupt sole copy returned the original bytes")
 	}
 }
+
+// A host that is dead for good goes with one command: `node remove --force` of the host
+// zeroes every slot of each of its disks, removes the disk and mirror rows, then the host
+// and its Raft seat. The zeroing proposes only for the slots still named, so a run cut
+// short (here: a subset zeroed beforehand) is finished by running it again without a
+// second proposal for any slot. Without --force the host is refused while a disk holds
+// slots, as before.
+// Invariant: I-418, I-42
+// Lifecycle: L-96
+func TestMembership_ForceRemove_DeadHost_Cascades(t *testing.T) {
+	c := testharness.NewCluster(t, 4, 2, 1)
+	defer c.Close()
+	const victim = 3
+	host := c.Nodes[victim].Idx()
+	disk1 := c.Nodes[victim].Target()
+	disk2 := c.AddDisk(victim)
+	leader := c.Leader()
+	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "add_mirror", NodeIdx: host, DiskID: "mirror-of-victim", Name: "victim/m1"}))
+	c.Settle()
+	const files = 40
+	for i := range files {
+		c.WriteFile(0, fmt.Sprintf("/f%d", i), testharness.Pattern(4*int(testharness.ChunkSize), byte(i)))
+	}
+	c.Settle()
+	onVictim := func() (chunks int, slots int) {
+		leader.Node.FSM.ForEachChunk(func(ch meta.Chunk) bool {
+			named := false
+			for _, s := range ch.Placement {
+				if s == disk1 || s == disk2 {
+					slots++
+					named = true
+				}
+			}
+			if named {
+				chunks++
+			}
+			return true
+		})
+		return chunks, slots
+	}
+	chunksBefore, slotsBefore := onVictim()
+	if chunksBefore < 20 {
+		t.Fatalf("test needs the victim's disks to hold slots of many chunks, got %d chunks", chunksBefore)
+	}
+	c.Kill(victim)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	leader = c.Leader()
+	// without --force the host is refused while its disks hold slots (I-42)
+	if err := leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: host}); !errors.Is(err, meta.ErrNodeNotEmpty) {
+		t.Fatalf("remove of a host with slots without --force: %v", err)
+	}
+	// a run cut short: some of the victim's slots are already zero
+	zeroedByHand := 0
+	leader.Node.FSM.ForEachChunk(func(ch meta.Chunk) bool {
+		if zeroedByHand >= 7 {
+			return false
+		}
+		place := append([]meta.NodeIdx(nil), ch.Placement...)
+		changed := false
+		for i, s := range place {
+			if s == disk1 || s == disk2 {
+				place[i], changed = 0, true
+			}
+		}
+		if changed {
+			res, _, err := leader.Node.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: ch.Hash, K: ch.K, M: ch.M, Placement: place, Expect: ch.Placement}})
+			must(t, err)
+			must(t, res.Err)
+			zeroedByHand++
+		}
+		return true
+	})
+	c.Settle()
+	var mu sync.Mutex
+	placements := map[meta.Hash]int{}
+	leader.Node.FSM.SetApplyHook(func(cmd meta.Command, _ uint64, _ meta.Result) {
+		if cmd.Op == meta.OpSetPlacement {
+			mu.Lock()
+			placements[cmd.SetPlacement.Hash]++
+			mu.Unlock()
+		}
+	})
+	defer leader.Node.FSM.SetApplyHook(nil)
+	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: host, Force: true}))
+	c.Settle()
+	if chunks, slots := onVictim(); chunks != 0 || slots != 0 {
+		t.Fatalf("%d slots of %d chunks still name the removed host's disks", slots, chunks)
+	}
+	mu.Lock()
+	proposed, twice := 0, 0
+	for _, n := range placements {
+		proposed++
+		if n > 1 {
+			twice++
+		}
+	}
+	mu.Unlock()
+	if proposed != chunksBefore-zeroedByHand || twice != 0 {
+		t.Fatalf("the forced remove proposed for %d chunks (%d twice), want exactly the %d still naming the disks", proposed, twice, chunksBefore-zeroedByHand)
+	}
+	zero := 0
+	leader.Node.FSM.ForEachChunk(func(ch meta.Chunk) bool {
+		for _, s := range ch.Placement {
+			if s == 0 {
+				zero++
+			}
+		}
+		return true
+	})
+	if zero != slotsBefore {
+		t.Fatalf("%d zero slots after the remove, want the victim's %d", zero, slotsBefore)
+	}
+	for _, nd := range leader.Node.FSM.Nodes() {
+		if (nd.Idx == host || nd.Host == host) && nd.State != meta.Removed {
+			t.Fatalf("row %s (%v) is %v after the host's forced remove", nd.Name, nd.Kind, nd.State)
+		}
+	}
+	cfg := leader.Node.Raft.GetConfiguration()
+	must(t, cfg.Error())
+	for _, s := range cfg.Configuration().Servers {
+		if string(s.ID) == c.Nodes[victim].ID {
+			t.Fatal("the removed host keeps its Raft seat")
+		}
+	}
+	// the files read back from the survivors
+	for i := range files {
+		if got, err := c.ReadFileCold(0, fmt.Sprintf("/f%d", i)); err != nil || !bytes.Equal(got, testharness.Pattern(4*int(testharness.ChunkSize), byte(i))) {
+			t.Fatalf("file %d after the remove: %v", i, err)
+		}
+	}
+}

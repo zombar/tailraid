@@ -527,6 +527,12 @@ func (c *Client) Join(ctx context.Context, addr string, req JoinRequest) (JoinRe
 
 // Members sends a member operation.
 func (c *Client) Members(ctx context.Context, addr string, op MemberOp) error {
+	if op.Op == "remove" && op.Force {
+		// zeroes every slot of the node first, one proposal per chunk: the caller's
+		// context alone bounds it, as a pass op (I-189, I-418)
+		body, _ := json.Marshal(op)
+		return c.postJSONRaw(ctx, addr, "/v1/members", body, nil, http.StatusOK)
+	}
 	return c.postJSON(ctx, addr, "/v1/members", op, nil, http.StatusOK)
 }
 

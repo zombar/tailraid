@@ -502,7 +502,9 @@ snapshot and the log after it are replayed into a fresh FSM, a snapshot carrying
 configuration is written and the log truncated, so the next `serve` starts as the leader
 of that set with every file it knew. Files whose shards survived on the remaining targets
 read exactly; a file whose only shards died with the lost nodes is `EIO`, never garbage;
-the member table still lists the lost nodes until they are removed or `reset` and re-join.
+the member table still lists the lost nodes until they are removed (`tailraid node remove
+<host> --force` takes a dead host with its disks and mirrors in one command and is safe to
+run again if a leadership change cuts it short, 06 §6, I-418) or `reset` and re-join.
 `recover` refuses to run while `serve` holds the data directory, on an uninitialised
 directory, and when the list leaves this node out (I-129). Run it on one node only: two
 recovered nodes are two clusters. When nothing of the cluster can be recovered, a mirror

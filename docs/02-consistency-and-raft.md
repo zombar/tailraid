@@ -122,7 +122,8 @@ terminal. The FSM refuses the transition to `Removed` with `ErrNodeNotEmpty` whi
 chunk entry (live or tombstoned) still has a non-zero placement slot on this node (every
 slot is a sole copy of its shard index, I-9). The CLI flow is `node drain` → wait for the
 repairer to re-place every slot → `node remove`; `--force` first proposes `SetPlacement`
-with slot 0 for every remaining slot, making the degradation explicit, then removes. Order
+with slot 0 for every remaining slot, making the degradation explicit, then removes (on a
+host, its disks and mirrors first, 06 §6, I-418). Order
 on the leader: `NodeSetState{Removed}` is committed first, then `raft.RemoveServer`, so the
 node table never lists a server that Raft has forgotten. A removed node is refused when it
 tries to join again until it has been `reset`.

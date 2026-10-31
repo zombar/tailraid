@@ -57,7 +57,10 @@ tailraid node drain jockey/1      # a disk, or a whole device: node drain oldbox
 tailraid node remove jockey/1     # refused while it still holds data
 ```
 
-Draining a device drains its disks too.
+Draining a device drains its disks too. A device that is dead for good cannot drain:
+`tailraid node remove oldbox --force` takes it out with its disks and mirrors, leaving its
+shards to be rebuilt from the other copies (the volume is degraded until that is done),
+and is safe to run again if it is cut short.
 
 ## Redundancy
 
