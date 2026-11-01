@@ -2,6 +2,12 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.11.4 (2026-11-01)
+
+### Changes
+
+- vfs: a client's first range in a cold chunk fetches its blocks (I-422..I-424) ([259b83b](https://github.com/zombar/tailraid/commit/259b83b))
+
 ## v0.11.3 (2026-11-01)
 
 ### Changes
