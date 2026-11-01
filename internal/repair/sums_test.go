@@ -2,6 +2,7 @@ package repair_test
 
 import (
 	"crypto/sha256"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -66,7 +67,11 @@ func TestRepair_BackfillSums_Bounded(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if sha256.Sum256(payload) != c.Sums[j] {
+					want := sha256.Sum256(payload)
+					if c.SumsKind == meta.SumsBlocks { // every member reads codec 18 here: roots (I-422)
+						want = chunk.ShardRoot(payload)
+					}
+					if c.Sums[j] != want {
 						t.Fatalf("recorded sum %d differs from the stored shard's hash", j)
 					}
 				}
@@ -136,5 +141,93 @@ func TestRepair_BackfillSums_WaitsForCodec5(t *testing.T) {
 	r.MinCodec = func() uint8 { return meta.CodecShardSums } // the upgrade finished
 	if st, err = r.Scan(ctx); err != nil || st.SumsRecorded != n {
 		t.Fatalf("after the upgrade: recorded %d, err %v", st.SumsRecorded, err)
+	}
+}
+
+// The backfill records block roots for a chunk whose sums are missing or whole-shard
+// while every member reads codec 18, and whole-shard sums for a chunk without any while
+// one reads less, leaving whole-shard sums alone then; a pass after the upgrade records
+// nothing and reports nothing pending.
+// Invariant: I-422
+func TestRepair_BackfillRoots_UpgradesShardSums(t *testing.T) {
+	const n = 3
+	for _, tc := range []struct {
+		name     string
+		minCodec uint8
+		kind     uint8
+		upgrades bool
+	}{
+		{"every member reads codec 18", meta.CodecBlockRoots, meta.SumsBlocks, true},
+		{"a member still reads codec 17", meta.CodecBlockRoots - 1, meta.SumsShard, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := testharness.NewFabric(t, 3, 2, 1)
+			fl := f.Flusher()
+			fl.MinCodec = func() uint8 { return meta.CodecBlockRoots - 1 } // written with whole-shard sums
+			var withSums, without []meta.Hash
+			for i := range 2 * n {
+				if i == n {
+					fl.MinCodec = func() uint8 { return meta.CodecShardSums - 1 } // the rest without any
+				}
+				ino := f.Create("f" + strconv.Itoa(i))
+				if err := f.Ov.Write(ino, 0, 0, testharness.Pattern(int(testharness.ChunkSize), byte(60+i))); err != nil {
+					t.Fatal(err)
+				}
+				if err := fl.FlushInode(ctx, ino); err != nil {
+					t.Fatal(err)
+				}
+				if i < n {
+					withSums = append(withSums, f.Inode(ino).Chunks[0])
+				} else {
+					without = append(without, f.Inode(ino).Chunks[0])
+				}
+			}
+			for _, h := range withSums {
+				if c, _ := f.FSM.GetChunk(h); c.Sums == nil || c.SumsKind != meta.SumsShard {
+					t.Fatalf("chunk written at codec 17 carries %v kind %d", c.Sums, c.SumsKind)
+				}
+			}
+			cfg := repair.DefaultConfig()
+			cfg.ScrubPeriod = 0
+			r := repair.New(f.FSM, f, f, f, f.ReaderNoCache(), f.Clk, cfg, nil)
+			r.MinCodec = func() uint8 { return tc.minCodec }
+			st, err := r.Scan(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := n
+			if tc.upgrades {
+				want = 2 * n
+			}
+			if st.SumsRecorded != want || st.SumsPending != 0 {
+				t.Fatalf("recorded %d pending %d, want %d and 0", st.SumsRecorded, st.SumsPending, want)
+			}
+			for _, h := range append(append([]meta.Hash(nil), withSums...), without...) {
+				c, _ := f.FSM.GetChunk(h)
+				kind := tc.kind
+				if !tc.upgrades && slices.Contains(withSums, h) {
+					kind = meta.SumsShard
+				}
+				if len(c.Sums) != int(c.K) || c.SumsKind != kind {
+					t.Fatalf("chunk %x: %d sums kind %d, want kind %d", h[:4], len(c.Sums), c.SumsKind, kind)
+				}
+				for j := range int(c.K) {
+					payload, err := f.StoreOf(c.Placement[j]).Get(chunk.Key(h, c.K, c.M, j))
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := sha256.Sum256(payload)
+					if c.SumsKind == meta.SumsBlocks {
+						want = chunk.ShardRoot(payload)
+					}
+					if c.Sums[j] != want {
+						t.Fatalf("chunk %x shard %d: the recorded sum is not the stored payload's", h[:4], j)
+					}
+				}
+			}
+			if st, err = r.Scan(ctx); err != nil || st.SumsRecorded != 0 || st.SumsPending != 0 {
+				t.Fatalf("second pass: recorded %d pending %d, %v", st.SumsRecorded, st.SumsPending, err)
+			}
+		})
 	}
 }

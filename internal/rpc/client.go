@@ -328,11 +328,81 @@ func (c *Client) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 	if resp.StatusCode != http.StatusOK {
 		return nil, errFromStatus(resp)
 	}
+	return c.readBody(parent, cancel, resp, node, t.addr, chunk.MaxPayload+chunk.HeaderSize)
+}
+
+// GetRange is the range GET of docs/04 §5 (I-423): the shard's block table and its
+// payload from off, the whole blocks covering n bytes, from a disk; an S3 node serves no
+// slice (ErrNoRange) and this host's own disk slices its verified payload.
+func (c *Client) GetRange(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, off, n int64) (chunk.Slice, error) {
+	if _, isS3, err := c.bucket(node); isS3 {
+		if err != nil {
+			return chunk.Slice{}, err
+		}
+		return chunk.Slice{}, chunk.ErrNoRange
+	}
+	if n <= 0 || off < 0 {
+		return chunk.Slice{}, fmt.Errorf("%w: empty range", ErrBadRequest)
+	}
+	t, err := c.target(node)
+	if err != nil {
+		return chunk.Slice{}, err
+	}
+	if t.self && t.store != nil {
+		payload, err := t.store.Get(key)
+		if err != nil {
+			return chunk.Slice{}, err
+		}
+		if off >= int64(len(payload)) {
+			return chunk.Slice{}, fmt.Errorf("%w: range past the payload", ErrBadRequest)
+		}
+		end := min(off+n, int64(len(payload)))
+		return chunk.Slice{Table: chunk.BlockSums(payload), Off: off, Data: payload[off:end]}, nil
+	}
+	parent := ctx
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	stopEarly := context.AfterFunc(parent, cancel)
+	resp, err := c.do(ctx, http.MethodGet, t.addr, t.prefix+string(key), nil, map[string]string{"Range": fmt.Sprintf("bytes=%d-%d", off, off+n-1)})
+	stopEarly()
+	if err != nil {
+		if parent.Err() != nil {
+			return chunk.Slice{}, parent.Err()
+		}
+		c.unreachable(parent, node, err)
+		return chunk.Slice{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
+		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+			return chunk.Slice{}, fmt.Errorf("%w: range past the payload", ErrBadRequest)
+		}
+		return chunk.Slice{}, errFromStatus(resp)
+	}
+	tableLen, err := strconv.Atoi(resp.Header.Get(HeaderBlockTable))
+	if err != nil || tableLen < 0 || tableLen%len(meta.Hash{}) != 0 || int64(tableLen) > resp.ContentLength {
+		return chunk.Slice{}, fmt.Errorf("%w: bad block table length %q", ErrUnavailable, resp.Header.Get(HeaderBlockTable))
+	}
+	body, err := c.readBody(parent, cancel, resp, node, t.addr, int64(tableLen)+n)
+	if err != nil {
+		return chunk.Slice{}, err
+	}
+	table := make([]meta.Hash, tableLen/len(meta.Hash{}))
+	for i := range table {
+		copy(table[i][:], body[i*len(meta.Hash{}):])
+	}
+	return chunk.Slice{Table: table, Off: off, Data: body[tableLen:]}, nil
+}
+
+// readBody reads resp's body whole, sized by its Content-Length (at most limit), under
+// callTimeout of that length; the caller's parent context giving up mid-body returns its
+// error, draining a little so the connection goes back to the pool (I-171, I-262).
+func (c *Client) readBody(parent context.Context, cancel context.CancelFunc, resp *http.Response, node meta.NodeIdx, addr string, limit int64) ([]byte, error) {
 	n := resp.ContentLength
 	switch {
 	case n < 0:
 		return nil, fmt.Errorf("%w: reply without a length", ErrUnavailable)
-	case n > chunk.MaxPayload+chunk.HeaderSize:
+	case n > limit:
 		return nil, ErrTooLarge // refused before any of it is read
 	}
 	t2 := c.clk.NewTimer(callTimeout(n))
@@ -363,7 +433,7 @@ func (c *Client) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 				return nil, parent.Err()
 			}
 			c.unreachable(parent, node, fmt.Errorf("%w: body: %w", errTransport, err))
-			return nil, fmt.Errorf("%w: GET %s body: %w", ErrUnavailable, t.addr, err)
+			return nil, fmt.Errorf("%w: GET %s body: %w", ErrUnavailable, addr, err)
 		}
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1)) // see EOF, so the connection is reused

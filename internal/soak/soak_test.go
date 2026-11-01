@@ -847,7 +847,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 30 { // the standard phases (1–24, 35, 33, 34, 32, 28–31) less 22 and 23
+	if sum.Failed != 0 || len(sum.Phases) != 31 { // the standard phases (1–24, 36, 35, 33, 34, 32, 28–31) less 22 and 23
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0

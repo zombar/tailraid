@@ -384,6 +384,11 @@ func (v *httpVolume) ReadAll(p string) ([]byte, error) {
 	return r.Data, err
 }
 
+func (v *httpVolume) ReadAt(p string, off int64, n int) ([]byte, error) {
+	r, err := v.do(fsReq{Op: "readat", Path: p, Off: off, Size: int64(n)})
+	return r.Data, err
+}
+
 // SetAttr sets a file's mode and times through the worker's NFS client (soak phase 34).
 func (v *httpVolume) SetAttr(p string, mode uint32, mtime time.Time) error {
 	_, err := v.do(fsReq{Op: "setattr", Path: p, Mode: mode, Mtime: mtime.UnixNano()})

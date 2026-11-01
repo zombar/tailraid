@@ -312,7 +312,8 @@ A version is legal only for the ops that need it (2: `NodeUpsert` with a host; 3
 `Flags`; 5 and 6: 02 §Codec versions; 7: `SnapshotBegin`, `SnapshotEnd`,
 `SnapshotDelete`, `SnapshotImport` and a `NodeUpsert` of a `KindMirror` row; 8: a `Trash`
 with `Own`; 9: a `Commit` with `Rewrite` or `RewriteStart`, a `Trash` with `Expect` and a `Rename`
-with `NoReplace`, I-223..I-226; 15: `SnapshotHeal`, I-393), so an entry can never smuggle
+with `NoReplace`, I-223..I-226; 15: `SnapshotHeal`, I-393; 18: a `Commit` or `SetShardSums` with
+`SumsKind`, I-422), so an entry can never smuggle
 a field an older reader would misparse.
 
 **Snapshot frame** (`EncodeState`):
@@ -328,7 +329,7 @@ u64      NextIno, u16 NextNode
 section  Nodes    uvarint count, then each Node (fields in struct order; strings as bytes; Host u16 (v ≥ 3))
 section  Chunks   uvarint count, then each Chunk {hash, Size u32, K u8, M u8, Refs u32,
                   uvarint len(Placement), Placement u16..., TombstonedAt i64,
-                  uvarint len(Sums), Sums 32B... (v ≥ 5)}
+                  uvarint len(Sums), Sums 32B... (v ≥ 5), SumsKind u8 (v ≥ 17)}
 section  Inodes   uvarint count, then each Inode {Ino, Gen, Type, Mode, Uid, Gid, Size,
                   Atime, Mtime, Ctime, Nlink, Version, Parent, Name,
                   Flags u8, DeletedAt i64 (v ≥ 4), RewriteAt u64 (v ≥ 9),

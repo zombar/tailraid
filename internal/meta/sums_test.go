@@ -119,7 +119,7 @@ func TestCodec_ReadsVersion4Snapshot(t *testing.T) {
 	}
 	want := withoutRewrites(s.Clone())
 	for _, c := range want.Chunks {
-		c.Sums = nil
+		c.Sums, c.SumsKind = nil, SumsShard
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("v4 round trip\n got %+v\nwant %+v", got, want)
@@ -194,7 +194,7 @@ func TestFSM_SetPlacement_PolicyChangeClearsSums(t *testing.T) {
 		t.Fatalf("a move within the policy lost the sums: %v", c.Sums)
 	}
 	tf.ok(Command{Op: OpSetPlacement, SetPlacement: &SetPlacement{Hash: a, K: 2, M: 2, Placement: []NodeIdx{1, 2, 3, 0}}})
-	if c, _ := tf.f.GetChunk(a); c.Sums != nil {
-		t.Fatalf("a re-encode kept the old sums: %v", c.Sums)
+	if c, _ := tf.f.GetChunk(a); c.Sums != nil || c.SumsKind != SumsShard {
+		t.Fatalf("a re-encode kept the old sums: %v kind %d", c.Sums, c.SumsKind)
 	}
 }

@@ -39,7 +39,7 @@ func (tf *tfsm) prow(viewer string, ino Ino) PlayRow {
 // and the same body in any older version, or another op in 17, is refused.
 // Invariant: I-406
 func TestEncodeCommand_V17Playback(t *testing.T) {
-	if CodecPlayback != commandVersionV17 || CodecVersion != commandVersionV17 {
+	if CodecPlayback != commandVersionV17 || CodecVersion < commandVersionV17 {
 		t.Fatalf("CodecPlayback %d, CodecVersion %d", CodecPlayback, CodecVersion)
 	}
 	c := act("t:pat@example.com", PlayWatched, 3, 4, 5)
@@ -245,7 +245,7 @@ func TestState_Frame16_RoundTrip(t *testing.T) {
 	tf.ok(pos("u:1", f, 5, 10))
 	tf.ok(act("t:pat@example.com", PlayPlayed, f))
 	a := encodeState(t, tf.f.state())
-	if a[4] != stateVersionV16 {
+	if a[4] != stateVersion { // frame 16 added the rows; the newest frame still carries them
 		t.Fatalf("frame %d", a[4])
 	}
 	st, err := DecodeState(bytes.NewReader(a))

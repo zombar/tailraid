@@ -41,6 +41,7 @@ var phases = []phase{
 	{"15 s3 bucket", phaseBucket},
 	{"16 web ui", phaseWeb},
 	{"17 hot path", phaseHotPath},
+	{"36 range reads", phaseRangeReads},
 	{"18 repair fan-out", phaseFanOut},
 	{"19 snapshots", phaseSnapshots},
 	{"20 stats", phaseStats},

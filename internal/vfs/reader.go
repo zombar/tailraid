@@ -46,6 +46,7 @@ type Reader struct {
 	last       map[meta.Ino]streams      // each inode's read streams (readahead, I-203)
 	tick       uint64                    // orders stream use: the least recent is replaced
 	prefetched map[meta.Hash]struct{}    // chunks a prefetch cached that no READ has consumed yet
+	ranged     map[meta.Hash]struct{}    // chunks a range fetch served that no fetch has read whole since (I-424)
 	pf         map[meta.Ino][]*fetchCall // the prefetches each inode's sequential READs started (I-203)
 	lat        latencyRing               // recent shard GET times: the hedge delay is their p95
 
@@ -56,6 +57,7 @@ type Reader struct {
 	raCancelled atomic.Uint64 // prefetches cut because their client seeked away (I-203)
 	raSkipped   atomic.Uint64 // readahead candidates skipped because every slot was busy (I-166)
 	readsEarly  atomic.Uint64 // ranges served from verified data shards rather than the decoded chunk (I-202)
+	readsRanged atomic.Uint64 // ranges served by a range fetch: a shard's covering blocks, no chunk fetch (I-424)
 	fetching    atomic.Int32  // fetches running on their own goroutine (ReadAtEarly)
 
 	// The fetches that outlive a client's read (readahead, the early path) run under stop
@@ -65,6 +67,11 @@ type Reader struct {
 	bg     sync.WaitGroup
 	closed bool // under mu: no detached fetch starts once set
 }
+
+// RangedMax bounds the chunks a reader remembers as served by a range fetch: past it the
+// set is cleared, costing at worst one more range fetch per chunk before its chunk fetch
+// (docs/04 §5, I-424).
+const RangedMax = 4096
 
 // ReadAhead is the most prefetches in flight gateway-wide, and the most chunks a
 // sequential READ prefetches beyond the one it asks for (docs/04 §5, I-166).
@@ -266,7 +273,7 @@ func NewReader(st *meta.Store, peers meta.Peers, shards chunk.ShardClient, cache
 	stop, halt := context.WithCancel(context.Background())
 	return &Reader{
 		st: st, peers: peers, shards: shards, cache: cache, codecs: codecs, log: slog.Default(),
-		inflight: map[meta.Hash]*fetchCall{}, last: map[meta.Ino]streams{}, prefetched: map[meta.Hash]struct{}{},
+		inflight: map[meta.Hash]*fetchCall{}, last: map[meta.Ino]streams{}, prefetched: map[meta.Hash]struct{}{}, ranged: map[meta.Hash]struct{}{},
 		pf:    map[meta.Ino][]*fetchCall{},
 		slots: make(chan struct{}, ReadAhead),
 		stop:  stop, halt: halt,
@@ -303,6 +310,10 @@ func (r *Reader) ReadaheadSkipped() uint64 { return r.raSkipped.Load() }
 // decoded chunk (docs/12 §8, I-202).
 func (r *Reader) ReadsEarly() uint64 { return r.readsEarly.Load() }
 
+// ReadsRanged reports the ranges served by a range fetch, the covering blocks of a shard
+// rather than the chunk (docs/12 §8, I-424).
+func (r *Reader) ReadsRanged() uint64 { return r.readsRanged.Load() }
+
 // Fetching reports the fetches ReadAtEarly left running on their own goroutine (tests
 // wait for them before the cache's directory goes).
 func (r *Reader) Fetching() int { return int(r.fetching.Load()) }
@@ -323,6 +334,12 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 	cs := r.st.Volume().ChunkSize
 	idx := uint64(off) / uint64(cs)
 	r.mu.Lock()
+	if idx < uint64(len(in.Chunks)) {
+		if _, served := r.ranged[in.Chunks[idx]]; served {
+			r.mu.Unlock() // a READ a range fetch served starts no readahead: the chunk's next READ does (I-424)
+			return
+		}
+	}
 	if _, seen := r.last[in.Ino]; !seen && len(r.last) >= hintCap {
 		clear(r.last)
 		clear(r.pf)
@@ -439,6 +456,9 @@ func (r *Reader) forgetPrefetchLocked(call *fetchCall) {
 // the cache before it takes r.mu and finds no fetch running, so a fetch that put the
 // chunk in the cache and left inflight in between is looked for here, not run again.
 func (r *Reader) run(ctx context.Context, h meta.Hash, call *fetchCall) ([]byte, error) {
+	r.mu.Lock()
+	delete(r.ranged, h) // read whole now: its next range is a range fetch again (I-424)
+	r.mu.Unlock()
 	if b, ok := r.cachedLate(h); ok {
 		call.data = b
 	} else {
@@ -471,6 +491,14 @@ func (r *Reader) cachedLate(h meta.Hash) ([]byte, bool) {
 }
 
 func sha256Sum(b []byte) meta.Hash { return sha256.Sum256(b) }
+
+// shardSum is a data shard's recorded sum of the given kind (docs/04 §5, I-422).
+func shardSum(kind uint8, b []byte) meta.Hash {
+	if kind == meta.SumsBlocks {
+		return chunk.ShardRoot(b)
+	}
+	return sha256Sum(b)
+}
 
 // ReadChunk returns the logical bytes of chunk h. HashZero returns nil (the caller
 // zero-fills). The slice may be shared with the cache and other readers: do not modify
@@ -625,7 +653,7 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk, call *fetchCall) ([]by
 						r.BadSlot(chunk.Key(c.Hash, c.K, c.M, x.slot), c.Placement[x.slot])
 					}
 				}
-			case sums && x.slot < k && sha256Sum(x.b) != c.Sums[x.slot]:
+			case sums && x.slot < k && shardSum(c.SumsKind, x.b) != c.Sums[x.slot]:
 				r.Events.Record(c.Hash, meta.EvReadBadSlot, fmt.Sprintf("slot %d node %d: shard does not match its recorded sum", x.slot, c.Placement[x.slot]))
 				if r.BadSlot != nil {
 					r.BadSlot(chunk.Key(c.Hash, c.K, c.M, x.slot), c.Placement[x.slot])
@@ -697,12 +725,15 @@ func (r *Reader) BaseReaderEarly(ctx context.Context, in meta.Inode) func(off ui
 	}
 }
 
-// ReadAtEarly is ReadAt for a client: a range inside one data shard of a chunk whose sums
-// are recorded is returned as soon as that shard arrived and matched its sum, before the
-// chunk is decoded and hashed (docs/04 §5, I-202). Everything else (a range across two
-// shards, a chunk without sums, a shard whose holder is dead or whose GET failed) waits
-// for the whole chunk as ReadAt does. The flusher, repair, scrub and the pins worker use
-// ReadAt and ReadChunk, never this.
+// ReadAtEarly is ReadAt for a client: a range in a chunk with block roots that is not
+// cached, not being fetched and not read by a range fetch before is served by one, the
+// covering blocks of each data shard it lies in, checked against the roots (docs/04 §5,
+// I-424); a range inside one data shard of a chunk whose sums are recorded is otherwise
+// returned as soon as that shard arrived and matched its sum, before the chunk is decoded
+// and hashed (I-202). Everything else (a range across two shards, a chunk without sums, a
+// shard whose holder is dead or whose GET failed) waits for the whole chunk as ReadAt
+// does. The flusher, repair, scrub and the pins worker use ReadAt and ReadChunk, never
+// this.
 func (r *Reader) ReadAtEarly(ctx context.Context, in meta.Inode, p []byte, off int64) (int, error) {
 	if off < 0 {
 		return 0, errors.New("vfs: negative offset")
@@ -767,6 +798,12 @@ func (r *Reader) readRange(ctx context.Context, h meta.Hash, inChunk uint64, dst
 	}
 	k := int(c.K)
 	lo, hi := inChunk, min(inChunk+uint64(len(dst)), uint64(c.Size))
+	if len(c.Sums) == k && c.SumsKind == meta.SumsBlocks && lo < hi && r.rangeFirst(h) {
+		if r.fetchRange(ctx, c, lo, hi, dst[:hi-lo]) {
+			r.readsRanged.Add(1)
+			return nil
+		}
+	}
 	call := r.joinOrStart(ctx, h)
 	abandoned := false
 	defer func() { r.leave(call, abandoned) }()
@@ -813,6 +850,98 @@ func (r *Reader) readRange(ctx context.Context, h meta.Hash, inChunk uint64, dst
 	}
 	fill(call.data)
 	return nil
+}
+
+// rangeFirst decides whether a READ of chunk h goes by a range fetch: yes when no fetch
+// of h is in flight and no range fetch served h since it was last read whole, and h is
+// then remembered; a remembered h is forgotten and read whole, so a client that comes
+// back to a chunk streams it through the cache and readahead (docs/04 §5, I-424).
+func (r *Reader) rangeFirst(h meta.Hash) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, running := r.inflight[h]; running {
+		return false
+	}
+	if _, served := r.ranged[h]; served {
+		delete(r.ranged, h)
+		return false
+	}
+	if len(r.ranged) >= RangedMax {
+		clear(r.ranged)
+	}
+	r.ranged[h] = struct{}{}
+	return true
+}
+
+// fetchRange fills dst with chunk bytes [lo, hi) from the covering blocks of the data
+// shards they lie in, each slice from its shard's live holder and verified against the
+// shard's recorded root; it reports false, having filled nothing the caller may keep,
+// when a holder is dead, serves no slice or fails, or a slice does not verify, which is
+// a bad slot as a shard failing its sum (docs/04 §5, I-424).
+func (r *Reader) fetchRange(ctx context.Context, c meta.Chunk, lo, hi uint64, dst []byte) bool {
+	k := int(c.K)
+	s := uint64(ec.ShardLen(int(c.Size), k))
+	live := meta.LiveSet(r.peers.Live())
+	j0, j1 := int(lo/s), int((hi-1)/s)
+	for j := j0; j <= j1; j++ {
+		if n := c.Placement[j]; n == 0 || !live[n] {
+			return false
+		}
+	}
+	type res struct {
+		j   int
+		sl  chunk.Slice
+		err error
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	out := make(chan res, j1-j0+1)
+	for j := j0; j <= j1; j++ {
+		go func() {
+			start := uint64(j) * s
+			a, b := chunk.BlockRange(int64(max(lo, start)-start), int64(min(hi, start+s)-start), int64(s))
+			sl, err := r.shards.GetRange(ctx, c.Placement[j], chunk.Key(c.Hash, c.K, c.M, j), a, b-a)
+			out <- res{j, sl, err}
+		}()
+	}
+	ok := true
+	for range j1 - j0 + 1 {
+		x := <-out
+		if !ok {
+			continue // the rest are cancelled: drain them
+		}
+		switch {
+		case x.err != nil:
+			if errors.Is(x.err, chunk.ErrNotFound) || errors.Is(x.err, chunk.ErrCorrupt) {
+				r.badSlot(c, x.j, x.err.Error())
+			}
+			ok = false
+		case !chunk.VerifySlice(x.sl, c.Sums[x.j]):
+			r.badSlot(c, x.j, "slice does not match the shard's recorded root")
+			ok = false
+		default:
+			start := uint64(x.j) * s
+			from, to := max(lo, start), min(hi, start+s)
+			off := int64(from-start) - x.sl.Off
+			if off < 0 || off+int64(to-from) > int64(len(x.sl.Data)) {
+				ok = false // the holder answered less than asked
+				continue
+			}
+			copy(dst[from-lo:to-lo], x.sl.Data[off:off+int64(to-from)])
+		}
+		if !ok {
+			cancel()
+		}
+	}
+	return ok
+}
+
+// badSlot records slot j of c as bad: the event, and the leader's queue through BadSlot.
+func (r *Reader) badSlot(c meta.Chunk, j int, why string) {
+	r.Events.Record(c.Hash, meta.EvReadBadSlot, fmt.Sprintf("slot %d node %d: %s", j, c.Placement[j], why))
+	if r.BadSlot != nil {
+		r.BadSlot(chunk.Key(c.Hash, c.K, c.M, j), c.Placement[j])
+	}
 }
 
 // waitersAdd counts one more READ waiting on a running call.

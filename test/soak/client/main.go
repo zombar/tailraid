@@ -249,6 +249,18 @@ func (w *worker) doFSOn(t *nfsc.Target, req fsReq) (resp fsResp) {
 			return fail(err)
 		}
 		return fsResp{Data: data, Size: int64(len(data))}
+	case "readat": // one READ of a range, as a preview or a seek issues (soak phase 36)
+		f, err := t.Open(req.Path)
+		if err != nil {
+			return fail(err)
+		}
+		defer f.Close()
+		buf := make([]byte, req.Size)
+		n, err := f.ReadAt(buf, req.Off)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return fail(err)
+		}
+		return fsResp{Data: buf[:n], Size: int64(n)}
 	case "setattr":
 		t3 := nfsc.NFS3Time{Seconds: uint32(req.Mtime / 1e9), Nseconds: uint32(req.Mtime % 1e9)} //nolint:gosec // a 2020s time
 		return fail(t.Setattr(req.Path, nfsc.Sattr3{

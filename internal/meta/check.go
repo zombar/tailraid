@@ -141,6 +141,9 @@ func CheckInvariants(st *State) []string {
 		if len(c.Sums) != 0 && len(c.Sums) != int(c.K) {
 			bad("chunk %x: %d sums for k=%d", h[:4], len(c.Sums), c.K)
 		}
+		if c.SumsKind > SumsBlocks || (c.SumsKind != SumsShard && len(c.Sums) == 0) {
+			bad("chunk %x: sums kind %d with %d sums", h[:4], c.SumsKind, len(c.Sums))
+		}
 		if !ValidPlacement(c.K, c.M, c.Placement) {
 			bad("chunk %x: placement %v invalid for k=%d m=%d", h[:4], c.Placement, c.K, c.M)
 		}

@@ -273,12 +273,14 @@ Chunks with < k good live slots are **unrepairable**; they are counted and liste
 `tailraid check --files` and retried on the next pass (a node may come back). Both repair
 and the GC worker are leader-only and run only while the leader is `Healthy`.
 
-**Sums backfill (04 §4, I-201).** A chunk committed before codec 5, or in a mixed
-cluster, carries no `Sums`, so the read path serves it whole. Each pass takes at most
-`SumsBatch` (256) such chunks, in hash order, among those it found healthy: it fetches k
-shards (background priority), decodes, verifies the chunk's hash, re-encodes and hashes
-the k data shards, and proposes `SetShardSums`; a chunk that fails its hash is left for
-the scrub. `status` reports `sums_recorded` and `sums_pending` in the last pass's stats;
+**Sums backfill (04 §4, I-201, I-422).** A chunk committed before codec 5, or in a mixed
+cluster, carries no `Sums`, so the read path serves it whole; a chunk recorded before
+codec 18 carries whole-shard sums, so a range in it reads k shards rather than its blocks
+(04 §5). Each pass takes at most `SumsBatch` (256) such chunks, in hash order, among those
+it found healthy: it fetches k shards (background priority), decodes, verifies the
+chunk's hash, re-encodes and hashes the k data shards (their block roots while every live
+member reads codec 18, else their whole-shard sums, and then only for chunks without
+any), and proposes `SetShardSums`; a chunk that fails its hash is left for the scrub. `status` reports `sums_recorded` and `sums_pending` in the last pass's stats;
 the backfill is complete when the latter reads 0. A cluster written on an older release is covered at the pass rate: 256 chunks a pass, a pass about every four minutes while the backfill reads 1 GiB per pass at 4 MiB chunks (110k chunks took about 30 hours on the real cluster).
 
 ## 4a. Where a pass looks: placement classes and the sweep

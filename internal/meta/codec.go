@@ -16,7 +16,8 @@ var stateMagic = []byte("TRM1")
 // snapshots are still read (the fields zero) so a cluster upgrades without a format
 // break (docs/12 §6, I-156).
 const (
-	stateVersion    = stateVersionV16 // the newest written; 6, 8, 10 and 12 are never written: those log codecs added no state
+	stateVersion    = stateVersionV17 // the newest written; 6, 8, 10 and 12 are never written: those log codecs added no state
+	stateVersionV17 = 17              // Chunk.SumsKind, the block roots (docs/04 §5, I-422)
 	stateVersionV16 = 16              // the playback rows (docs/13 §10c, I-406)
 	stateVersionV15 = 15              // users, groups and permissions (docs/21, I-349): the identity rows, grants, invites, sessions, a secret's user
 	// 13 and 14 are 0.9.x's frames, the withdrawn mesh's fields before the users tables:
@@ -87,6 +88,9 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		w.i64(c.TombstonedAt)
 		if version >= stateVersionV5 {
 			w.hashes(c.Sums)
+		}
+		if version >= stateVersionV17 {
+			w.u8(c.SumsKind)
 		}
 		w.spill()
 	}
@@ -219,7 +223,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 	if r.err == nil && (version == stateVersionMesh13 || version == stateVersionMesh14) {
 		return nil, fmt.Errorf("%w (frame %d)", ErrMeshSnapshot, version)
 	}
-	if r.err == nil && version != stateVersion && version != stateVersionV15 && version != stateVersionV11 && version != stateVersionV9 && version != stateVersionV7 && version != stateVersionV5 && version != stateVersionV4 && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
+	if r.err == nil && version != stateVersion && version != stateVersionV16 && version != stateVersionV15 && version != stateVersionV11 && version != stateVersionV9 && version != stateVersionV7 && version != stateVersionV5 && version != stateVersionV4 && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
 		return nil, fmt.Errorf("meta: unsupported snapshot version %d", version)
 	}
 	s := &State{
@@ -272,6 +276,9 @@ func DecodeState(rd io.Reader) (*State, error) {
 		c := &Chunk{Hash: h, Size: r.u32(), K: r.u8(), M: r.u8(), Refs: r.u32(), Placement: r.nodeIdxs(), TombstonedAt: r.i64()}
 		if version >= stateVersionV5 {
 			c.Sums = r.hashes()
+		}
+		if version >= stateVersionV17 {
+			c.SumsKind = r.u8()
 		}
 		if h == HashZero {
 			return nil, fmt.Errorf("meta: snapshot contains a HashZero chunk entry")

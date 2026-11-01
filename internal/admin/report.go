@@ -160,6 +160,7 @@ type GatewayReport struct {
 	ReadaheadCancelled uint64 `json:"readahead_cancelled"` // prefetches cut by a client's seek (I-203)
 	ReadaheadSkipped   uint64 `json:"readahead_skipped"`   // candidates skipped with every slot busy (I-166)
 	ReadsEarly         uint64 `json:"reads_early"`         // ranges served from verified data shards rather than the decoded chunk (I-202)
+	ReadsRanged        uint64 `json:"reads_ranged"`        // ranges served by a range fetch, a shard's covering blocks rather than the chunk (I-424)
 	Prefetching        int    `json:"prefetching"`
 	// rewrites this gateway dropped because another client's rewrite of the same file
 	// started later (docs/04 §6, I-223)
@@ -192,6 +193,7 @@ func (g *GatewayReport) WithReader(rd *vfs.Reader) *GatewayReport {
 	g.ReadaheadCancelled = rd.ReadaheadCancelled()
 	g.ReadaheadSkipped = rd.ReadaheadSkipped()
 	g.ReadsEarly = rd.ReadsEarly()
+	g.ReadsRanged = rd.ReadsRanged()
 	g.Prefetching = rd.Prefetching()
 	return g
 }

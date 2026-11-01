@@ -21,6 +21,9 @@ type Volume interface {
 	Mkdir(p string) error // MkdirAll semantics
 	WriteAt(p string, off int64, data []byte) error
 	ReadAll(p string) ([]byte, error)
+	// ReadAt reads n bytes at off, fewer at the file's end: one client READ of a range,
+	// as a preview or a seek issues (docs/04 §5, soak phase 36).
+	ReadAt(p string, off int64, n int) ([]byte, error)
 	Truncate(p string, size int64) error
 	Rename(from, to string) error
 	Remove(p string) error // files and empty directories
@@ -87,6 +90,24 @@ func (v OSVolume) WriteAt(p string, off int64, data []byte) error {
 
 func (v OSVolume) ReadAll(p string) (data []byte, err error) {
 	err = v.retry(func() error { data, err = os.ReadFile(v.abs(p)); return err })
+	return data, err
+}
+
+func (v OSVolume) ReadAt(p string, off int64, n int) (data []byte, err error) {
+	err = v.retry(func() error {
+		f, err := os.Open(v.abs(p))
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		buf := make([]byte, n)
+		m, err := f.ReadAt(buf, off)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		data = buf[:m]
+		return nil
+	})
 	return data, err
 }
 
@@ -184,6 +205,20 @@ func (v BillyVolume) ReadAll(p string) ([]byte, error) {
 	}
 	defer f.Close()
 	return io.ReadAll(f)
+}
+
+func (v BillyVolume) ReadAt(p string, off int64, n int) ([]byte, error) {
+	f, err := v.FS.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf := make([]byte, n)
+	m, err := f.ReadAt(buf, off)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return buf[:m], nil
 }
 
 func (v BillyVolume) Hash(p string) ([32]byte, int64, error) {

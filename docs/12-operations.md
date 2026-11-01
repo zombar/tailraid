@@ -332,11 +332,13 @@ runtime, and on the gateway `gateway.plan_bytes` (dirty bytes in flushes under w
 I-203), `gateway.readahead_skipped` (readahead candidates skipped because every slot was
 busy: readahead saturated, the client fetches those chunks itself, I-166),
 `gateway.reads_early` (ranges served from verified data shards rather than from
-the decoded chunk, 04 §5, I-202), `gateway.prefetching` (prefetches in flight
+the decoded chunk, 04 §5, I-202), `gateway.reads_ranged` (ranges served by a range
+fetch: the covering blocks of a shard rather than the chunk, 04 §5, I-424), `gateway.prefetching` (prefetches in flight
 right now) and `gateway.rewrites_superseded` (rewrites of a file this gateway dropped
 because another client's rewrite of it started later, 04 §6, I-223). On the leader `repair.stats.sums_recorded` and `repair.stats.sums_pending`
 count the chunks whose data-shard sums the last pass recorded and the chunks still
-without them (06 §4, I-201). The soak sampler records them every second
+without them, or without block roots once every member reads codec 18 (06 §4, I-201,
+I-422). The soak sampler records them every second
 and the report charts the heap next to the WAL depth, so a memory regression under a
 large copy is a visible line, not a guess (I-84).
 

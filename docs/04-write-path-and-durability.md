@@ -376,6 +376,50 @@ from the chunk's content (I-40). The flusher's base reads (`BaseReader`, §4 ste
 repair, scrub and the pins worker keep the strict `ReadAt`/`ReadChunk`. `status` counts
 `reads_early` (12 §8).
 
+**A range from a holder's blocks (I-422..I-424).** Early serve still moves k whole shards
+for a range inside one of them, and a client that touches a chunk once touches it for a
+few KiB: Finder and Explorer read the head of every file in a folder for previews and
+properties, the tag reader reads heads and tails, a seek and a frame grab land mid-chunk.
+Measured through the Mac's mount on 2026-11-01 while honker rebalanced, the first 64 KiB
+of a cold file took 326 ms median and 730 ms p90, the last 64 KiB (whose chunk is usually
+a partial one) 66 ms, and a cached head 0 ms: the bytes on the wire are the cost, three
+1.4 MiB shards for 64 KiB. The remedy is a sum a slice can be checked against. A data
+shard's **block table** is the SHA-256 of each `BlockSize` (64 KiB) block of its stored
+payload in order, and its **root** the SHA-256 of the table's hashes concatenated
+(`chunk.BlockSums`, `chunk.BlockRoot`, `chunk.ShardRoot`); a chunk's `SumsKind` says
+whether its `Sums` are the whole-shard SHA-256s of codec 5 (`SumsShard`) or the roots
+(`SumsBlocks`, codec 18, snapshot version 17). The flusher records roots while every live
+member reads codec 18 and whole-shard sums while one reads 5 to 17 (the codec gate of §4
+unchanged); the backfill of 06 §4 records roots for a chunk whose sums are missing or
+whole-shard, and `sums_pending` counts both; the FSM fills missing sums, takes whole-shard
+to roots, keeps roots over whole-shard, and refuses sums that differ within a kind, as
+before (I-422). Verifying a whole shard against a root costs one pass over its bytes, as
+the flat sum did.
+
+A holder serves a slice. `GET` of a shard with `Range: bytes=a-b` answers `206` whose body
+is the block table followed by the payload bytes `[a, b]` clamped to the payload,
+`X-Tailraid-Block-Table` carrying the table's length in bytes; the holder reads and
+verifies the whole shard first, as for any GET, so a corrupt shard is `422` and
+quarantined, a missing one `404`, and a start past the payload `416` (I-423). The
+holder's cost is unchanged by the slice (a later change can keep the table in the shard
+file); the wire carries the blocks. `ShardClient.GetRange` asks for whole blocks, widening
+`[lo, hi)` to the blocks that cover it, and returns `chunk.ErrNoRange` for an S3 node,
+whose object comes with no table; the self path slices the local store's verified
+payload.
+
+`ReadAtEarly` serves a range by a **range fetch** when the chunk is not cached, no fetch
+of it is in flight, its sums are roots, and the reader has not served it by a range fetch
+before (`RangedMax` chunks remembered): for each data shard the range covers, the table
+and the covering blocks from the shard's holder, which must be live and not an S3 node;
+the table must hash to the recorded root and each block to its entry, else the slot is a
+bad slot (`BadSlot`, the event, as a shard that fails its sum) and the range reads the
+chunk. A range fetch decodes nothing, fills no cache and starts no readahead (`Prefetch`
+skips a chunk the reader remembers). A READ of a remembered chunk forgets it and reads
+the chunk as before, so a sequential client pays one small round trip for its first bytes
+and then streams through the cache and readahead, while a preview, a tag read or a seek
+pays the slice alone. A chunk without roots, a dead or S3 holder and a failed range fetch
+read the chunk as before. `status` counts `reads_ranged` (12 §8) (I-424).
+
 `ReadAt` walks chunk indexes, copies `min(eff, c.Size)` bytes from each chunk and zero-fills
 the remainder (a short dedup'd chunk under a truncate-up). The overlay is consulted first:
 `Overlay.Read` merges WAL extents over base bytes.
@@ -669,8 +713,9 @@ the WAL cap.
   shares the in-flight table with foreground reads so no chunk is fetched twice, holds no
   bytes beyond its own fetch (the result goes only to the cache), and its failure changes
   nothing a client sees.
-- **I-201** — A chunk's `Sums` are the SHA-256 of each of its k data shards' stored
-  payload, a pure function of the chunk's bytes and `(k, m)`: the flusher computes them
+- **I-201** — A chunk's `Sums` are one hash per data shard of its stored payload (the
+  whole-shard SHA-256 or the block root of I-422, as `SumsKind` says), a pure function
+  of the chunk's bytes and `(k, m)`: the flusher computes them
   from the shards it encodes and the `Commit` carries them while every live member reads
   codec 5, otherwise the chunk is committed without them and the leader's backfill
   records them with `SetShardSums` after fetching, decoding and verifying the chunk, at
@@ -725,6 +770,31 @@ the WAL cap.
   the leader's backfill records them once every live member reads codec 5 (06 §4); while
   a live member reads less, a repair pass backfills nothing, fetching no chunk for a
   `SetShardSums` the leader would refuse.
+- **I-422** — A chunk's `SumsKind` says what its `Sums` are: `SumsShard`, the SHA-256 of
+  each data shard's stored payload (codec 5), or `SumsBlocks`, the root of each data
+  shard's block table (the SHA-256 of each `BlockSize` block in order, the root the
+  SHA-256 of the table; codec 18, snapshot version 17); both are pure functions of the
+  chunk's bytes and `(k, m)`. The flusher records roots while every live member reads
+  codec 18, whole-shard sums while one reads codec 5 to 17, and none below; the backfill
+  records roots for a chunk whose sums are missing or whole-shard and `sums_pending`
+  counts both; the FSM fills missing sums, takes whole-shard sums to roots, keeps roots
+  over whole-shard sums, refuses sums that differ within a kind (`ErrConflict`) and
+  clears both on a `SetPlacement` to another `(k, m)`; a snapshot before version 17 and
+  an entry before codec 18 read as whole-shard sums.
+- **I-423** — A shard `GET` with a `Range` answers `206` with the shard's block table
+  followed by the payload bytes the range names, clamped to the payload, from a shard the
+  holder read and verified whole (a corrupt shard is `422` and quarantined, a missing one
+  `404`, a start past the payload `416`); the table holds one SHA-256 per `BlockSize`
+  block of the payload in order and the response names its length. An S3 node is asked
+  no range (`ErrNoRange`).
+- **I-424** — A client READ of a range in a chunk that is not cached, has no fetch in
+  flight, carries block roots and is not remembered by the reader is served by a range
+  fetch: for each data shard the range covers, the table and the covering whole blocks
+  from the shard's live holder, the table hashing to the recorded root and each block to
+  its entry, else the slot is reported bad and the range reads the chunk; a range fetch
+  decodes nothing, fills no cache and starts no readahead, and the reader remembers the
+  chunk, so its next READ reads it whole; a chunk without roots, a dead or S3 holder and
+  a failed range fetch read the chunk as before. `status` counts `reads_ranged`.
 
 ## Tests
 
@@ -762,5 +832,8 @@ the WAL cap.
 | I-401 | `TestEncodeCommand_V16Attrs`, `TestFSM_Commit_AppliesAttrs`, `TestOverlay_HoldAttrs_DirtyOnly`, `TestOverlay_HoldAttrs_WriteDropsTimes`, `TestOverlay_Attrs_CaptureCommitAbort`, `TestOverlay_Attrs_PinTheirSegment`, `TestVFS_CopyLandsWhole`, `TestCluster_AttrsLandWhileMemberOld` |
 | I-402 | `TestVFS_SetAttr_NoChangeNoProposal` |
 | I-403 | `TestVFS_CopyLandsWhole`, `TestGatewayReport_Proposals` |
+| I-422 | `TestBlockSums_Table`, `TestEncodeCommand_V18SumsKind`, `TestCodec_StateRoundTrip`, `TestCodec_ReadsVersion16SnapshotAsShardSums`, `TestFSM_SetShardSums_KindTable`, `TestFSM_Commit_SumsKindUpgrade`, `TestFSM_SetPlacement_PolicyChangeClearsSums`, `TestFlusher_SumsKindByCodec_Table`, `TestRepair_BackfillRoots_UpgradesShardSums` |
+| I-423 | `TestChunkRPC_RangeGet_Table`, `TestChunkRPC_RangeGet_CorruptMissingPastEnd`, `TestClient_GetRange_S3IsNoRange` |
+| I-424 | `TestReader_RangeFetch_FirstTouchBlocksOnly`, `TestReader_RangeFetch_SecondTouchReadsChunk`, `TestReader_RangeFetch_CrossesShards`, `TestReader_RangeFetch_BadBlockFallsBack`, `TestReader_RangeFetch_FallsBackTable`, `TestReader_RangeFetch_JoinsFetchInFlight`, `TestFile_ReadAt_RangeFetchStartsNoReadahead`, `TestCluster_RangeRead_ThroughOtherGateway`, soak phase 36 |
 | I-416 | `TestNFS_CreateMode_NoSetAttr` |
 | I-101 | `TestWAL_FsyncFailureReopens`, `TestWAL_CompactReopenFailureClosesLog` |
