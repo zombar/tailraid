@@ -2,6 +2,12 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.11.3 (2026-11-01)
+
+### Changes
+
+- meta: a home move completes a home above the host cap, every away slot in one step (I-294) ([16bcfa7](https://github.com/zombar/tailraid/commit/16bcfa7))
+
 ## v0.11.2 (2026-11-01)
 
 ### Changes
