@@ -743,7 +743,7 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 			if sweep && one.homeWaiting {
 				homeQ = append(homeQ, c.Hash)
 			}
-			if sweep && c.Sums == nil {
+			if sweep && r.lacksSums(c) {
 				noSums++
 				if one.SumsRecorded == 0 {
 					sumsQ = append(sumsQ, c.Hash)
@@ -954,7 +954,7 @@ func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, n
 		if r.homeOne(ctx, c, vol, hv, shard, &st) {
 			return st
 		}
-		if c.Sums == nil && r.sumsLeft.Add(-1) >= 0 { // a healthy chunk without sums: record them (I-201)
+		if r.lacksSums(c) && r.sumsLeft.Add(-1) >= 0 { // a healthy chunk without sums, or without roots: record them (I-201, I-422)
 			if err := r.backfillSums(ctx, c); err != nil {
 				st.Errors++
 				r.warnRepair.Warn(r.log, "shard sums not recorded", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
@@ -1046,15 +1046,33 @@ func (r *Repairer) backfillSums(ctx context.Context, c meta.Chunk) error {
 	if err != nil {
 		return err
 	}
+	kind := meta.SumsShard
+	if r.wantRoots() {
+		kind = meta.SumsBlocks
+	}
 	sums := make([]meta.Hash, int(c.K))
 	for j := range sums {
-		sums[j] = sha256.Sum256(shards[j])
+		if kind == meta.SumsBlocks {
+			sums[j] = chunk.ShardRoot(shards[j])
+		} else {
+			sums[j] = sha256.Sum256(shards[j])
+		}
 	}
-	res, _, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetShardSums, SetShardSums: &meta.SetShardSums{Hash: c.Hash, Sums: sums}})
+	res, _, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetShardSums, SetShardSums: &meta.SetShardSums{Hash: c.Hash, Sums: sums, SumsKind: kind}})
 	if err != nil {
 		return err
 	}
 	return res.Err
+}
+
+// wantRoots reports whether the backfill records block roots: every live member reads
+// codec 18 (docs/04 §5, I-422).
+func (r *Repairer) wantRoots() bool { return r.MinCodec == nil || r.MinCodec() >= meta.CodecBlockRoots }
+
+// lacksSums reports whether c needs the backfill: no sums, or whole-shard sums where
+// roots are wanted (I-201, I-422).
+func (r *Repairer) lacksSums(c meta.Chunk) bool {
+	return c.Sums == nil || (c.SumsKind != meta.SumsBlocks && r.wantRoots())
 }
 
 // homeOne counts c's away slots and, while the gate lets this pass move one more chunk,

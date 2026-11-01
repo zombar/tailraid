@@ -15,6 +15,10 @@ import (
 type ShardClient interface {
 	Put(ctx context.Context, node meta.NodeIdx, key ShardKey, body []byte) error
 	Get(ctx context.Context, node meta.NodeIdx, key ShardKey) ([]byte, error)
+	// GetRange returns the shard's block table and its payload from off, the whole blocks
+	// covering n bytes (the caller widens with BlockRange), from a node that serves
+	// slices; ErrNoRange from one that does not (docs/04 §5, I-423).
+	GetRange(ctx context.Context, node meta.NodeIdx, key ShardKey, off, n int64) (Slice, error)
 	Has(ctx context.Context, node meta.NodeIdx, key ShardKey) (bool, error)
 	Delete(ctx context.Context, node meta.NodeIdx, key ShardKey) error
 }

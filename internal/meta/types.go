@@ -163,7 +163,17 @@ type Chunk struct {
 	// the flusher or the backfill (docs/04 §4, I-201); nil until then. Never modified in
 	// place: copy on write like Placement.
 	Sums []Hash
+	// SumsKind says what Sums are: SumsShard, the SHA-256 of each data shard's payload,
+	// or SumsBlocks, the root of each data shard's block table (docs/04 §5, I-422).
+	// Zero without Sums.
+	SumsKind uint8
 }
+
+// The kinds of Chunk.Sums (docs/04 §5, I-422).
+const (
+	SumsShard  uint8 = 0 // the whole-shard SHA-256 (codec 5)
+	SumsBlocks uint8 = 1 // the root of the chunk.BlockSize block table (codec 18)
+)
 
 // NodeKind distinguishes devices (Raft members, gateways, storage) from S3 buckets
 // (storage only).

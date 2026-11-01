@@ -189,7 +189,9 @@ RTT, so a decode runs only when a data holder is dead or hedged or this host hol
 first `k` in parallel; on any failure or `ErrCorrupt`
 pull the next slot until `k` good shards are in hand; `Decode(shards, c.Size)`; verify
 `sha256 == h` (a mismatch is `EIO` and is logged with the slot list for scrub); cache.
-Fewer than `k` reachable shards ⇒ `EIO` for that chunk only.
+Fewer than `k` reachable shards ⇒ `EIO` for that chunk only. A client's first range in a
+chunk fetches only the covering blocks of the data shards it lies in, checked against the
+shards' block roots (04 §5, I-424).
 
 S3 nodes rank last so that bulk reads never touch a bucket while enough device shards are
 reachable; a bucket is the shard source of last resort and the off-site copy.

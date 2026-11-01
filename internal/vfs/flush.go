@@ -105,10 +105,11 @@ type Flusher struct {
 
 // placedChunk is a chunk this flusher uploaded that no Commit has registered yet.
 type placedChunk struct {
-	k, m  uint8
-	place []meta.NodeIdx
-	sums  []meta.Hash
-	at    time.Time // when its PUTs were acked
+	k, m     uint8
+	place    []meta.NodeIdx
+	sums     []meta.Hash
+	sumsKind uint8
+	at       time.Time // when its PUTs were acked
 }
 
 // placedCap bounds the placed table; past it the table is cleared, costing at worst one
@@ -123,7 +124,7 @@ func (f *Flusher) rememberPlaced(w *chunkWork, at time.Time) {
 	if len(f.placed) >= placedCap {
 		clear(f.placed)
 	}
-	f.placed[w.hash] = placedChunk{k: w.k, m: w.m, place: slices.Clone(w.place), sums: slices.Clone(w.sums), at: at}
+	f.placed[w.hash] = placedChunk{k: w.k, m: w.m, place: slices.Clone(w.place), sums: slices.Clone(w.sums), sumsKind: w.sumsKind, at: at}
 }
 
 // recentPlaced is the placement of h this flusher uploaded within ReuseFor; an older
@@ -490,7 +491,8 @@ type chunkWork struct {
 	hash     meta.Hash
 	k, m     uint8
 	place    []meta.NodeIdx
-	sums     []meta.Hash // the data shards' hashes, from the encode (I-201)
+	sums     []meta.Hash // the data shards' sums, from the encode (I-201)
+	sumsKind uint8       // what sums are: roots while every member reads codec 18 (I-422)
 	uploaded bool
 }
 
@@ -764,7 +766,7 @@ func (f *Flusher) resolve(ctx context.Context, w *chunkWork, data []byte, forceU
 			keep, present := f.presentSlots(ctx, meta.Chunk{Hash: w.hash, K: p.k, M: p.m, Placement: p.place})
 			w.k, w.m = p.k, p.m
 			if present == int(p.k)+int(p.m) {
-				w.place, w.sums, w.uploaded = keep, slices.Clone(p.sums), true
+				w.place, w.sums, w.sumsKind, w.uploaded = keep, slices.Clone(p.sums), p.sumsKind, true
 				f.Events.Record(w.hash, meta.EvUploaded, fmt.Sprintf("%d+%d reused placement %v", w.k, w.m, keep))
 				return nil
 			}
@@ -860,9 +862,14 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, data []byte, keep []
 	if err != nil {
 		return err
 	}
-	w.sums = make([]meta.Hash, int(w.k)) // a pure function of the chunk's bytes and (k, m), I-201
+	// a pure function of the chunk's bytes and (k, m), I-201: the block roots once every
+	// member reads codec 18, the whole-shard sums before (I-422)
+	w.sums, w.sumsKind = make([]meta.Hash, int(w.k)), meta.SumsShard
+	if f.MinCodec == nil || f.MinCodec() >= meta.CodecBlockRoots {
+		w.sumsKind = meta.SumsBlocks
+	}
 	for j := range w.sums {
-		w.sums[j] = sha256Sum(shards[j])
+		w.sums[j] = shardSum(w.sumsKind, shards[j])
 	}
 	f.hold(total * len(shards[0]))
 	defer f.release(total * len(shards[0]))
@@ -1079,14 +1086,15 @@ func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWo
 	seen := map[meta.Hash]bool{}
 	// else the backfill records them (docs/06 §4)
 	withSums := !noSums && (f.MinCodec == nil || f.MinCodec() >= meta.CodecShardSums)
+	withRoots := f.MinCodec == nil || f.MinCodec() >= meta.CodecBlockRoots
 	var lastFull uint64
 	for _, w := range works {
 		cmd.Writes = append(cmd.Writes, meta.ChunkWrite{Idx: uint32(w.idx), Hash: w.hash})
 		if !w.hole && w.uploaded && !seen[w.hash] {
 			seen[w.hash] = true
 			d := meta.ChunkDesc{Hash: w.hash, Size: w.size, K: w.k, M: w.m, Placement: w.place}
-			if withSums {
-				d.Sums = w.sums
+			if withSums && (w.sumsKind == meta.SumsShard || withRoots) { // roots encoded while a member fell back: the backfill records them
+				d.Sums, d.SumsKind = w.sums, w.sumsKind
 			}
 			cmd.NewChunks = append(cmd.NewChunks, d)
 		}

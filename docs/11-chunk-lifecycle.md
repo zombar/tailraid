@@ -191,7 +191,7 @@ these numbers.
 - E-131 SnapshotBegin: a sync to a mirror starts and holds GC (16 §3, §4)
 - E-132 SnapshotEnd: the sync completes, completes with missing chunks, or fails (16 §3)
 - E-133 a revert, copy or tree restore from a snapshot (16 §6)
-- E-134 a chunk decoded from k shards fails its hash: every reader waiting for it gets `EIO`, the chunk stays out of the cache, the scrub finds the bad shard (04 §5, I-202); ranges already served from a data shard were verified against its recorded sum (I-201)
+- E-134 a chunk decoded from k shards fails its hash: every reader waiting for it gets `EIO`, the chunk stays out of the cache, the scrub finds the bad shard (04 §5, I-202); ranges already served from a data shard were verified against its recorded sum (I-201), and a block a range fetch found not matching its table, or a table not matching its root, reports the slot bad the same way (04 §5, I-424)
 
 **5. Transition table.**
 

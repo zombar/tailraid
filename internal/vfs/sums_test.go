@@ -102,3 +102,46 @@ func TestFlusher_CommitRefusedForCodec_CommitsWithoutSums(t *testing.T) {
 		t.Fatalf("content differs at %d", testharness.FirstDiff(got, want))
 	}
 }
+
+// The flusher records block roots while every live member reads codec 18 and whole-shard
+// sums while one reads codec 5 to 17; either kind is the stored payload's.
+// Invariant: I-422
+func TestFlusher_SumsKindByCodec_Table(t *testing.T) {
+	f := testharness.NewFabric(t, 4, 2, 1)
+	cs := int(testharness.ChunkSize)
+	for _, tc := range []struct {
+		name     string
+		minCodec uint8
+		kind     uint8
+	}{
+		{"a member still reads codec 5", meta.CodecShardSums, meta.SumsShard},
+		{"a member still reads codec 17", meta.CodecBlockRoots - 1, meta.SumsShard},
+		{"every member reads codec 18", meta.CodecBlockRoots, meta.SumsBlocks},
+		{"every member reads a newer codec", meta.CodecBlockRoots + 1, meta.SumsBlocks},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := testharness.Pattern(cs, byte(len(tc.name)))
+			ino := f.Create(tc.name)
+			must(t, f.Ov.Write(ino, 0, 0, data))
+			fl := f.Flusher()
+			fl.MinCodec = func() uint8 { return tc.minCodec }
+			must(t, fl.FlushInode(context.Background(), ino))
+			h := f.Inode(ino).Chunks[0]
+			c, ok := f.FSM.GetChunk(h)
+			if !ok || len(c.Sums) != int(c.K) || c.SumsKind != tc.kind {
+				t.Fatalf("chunk: %d sums kind %d, want kind %d", len(c.Sums), c.SumsKind, tc.kind)
+			}
+			for j := range int(c.K) {
+				payload, err := f.StoreOf(c.Placement[j]).Get(chunk.Key(h, c.K, c.M, j))
+				must(t, err)
+				want := sha256.Sum256(payload)
+				if tc.kind == meta.SumsBlocks {
+					want = chunk.ShardRoot(payload)
+				}
+				if c.Sums[j] != want {
+					t.Fatalf("shard %d: the recorded sum is not the stored payload's", j)
+				}
+			}
+		})
+	}
+}

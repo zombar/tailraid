@@ -107,7 +107,7 @@ func TestUsersState_Snapshot(t *testing.T) {
 	if err := EncodeState(&a, u.f.st); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(a.Bytes(), []byte("TRM1\x10")) {
+	if !bytes.HasPrefix(a.Bytes(), []byte("TRM1\x11")) {
 		t.Fatalf("header %x", a.Bytes()[:5])
 	}
 	got, err := DecodeState(bytes.NewReader(a.Bytes()))
@@ -168,8 +168,8 @@ func TestDecodeState_MeshFramesRefused(t *testing.T) {
 	if err := EncodeState(&buf, NewState()); err != nil {
 		t.Fatal(err)
 	}
-	if v := buf.Bytes()[4]; v != stateVersionV16 {
-		t.Fatalf("this release writes frame %d, want 16", v)
+	if v := buf.Bytes()[4]; v != stateVersionV17 {
+		t.Fatalf("this release writes frame %d, want 17", v)
 	}
 	for _, v := range []byte{13, 14} {
 		b := append([]byte(nil), buf.Bytes()...)

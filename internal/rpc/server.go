@@ -468,6 +468,67 @@ func writeRestoreErr(w http.ResponseWriter, err error) {
 	}
 }
 
+// serveSlice answers a shard GET with a Range (docs/04 §5, I-423): 206 with the block
+// table of the whole payload followed by the bytes named, clamped to the payload, from a
+// shard read and verified whole as every GET; a start past the payload is 416.
+func (s *Server) serveSlice(w http.ResponseWriter, r *http.Request, store ShardStore, key chunk.ShardKey) {
+	first, last, ok := parseRange(r.Header.Get("Range"))
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad range")
+		return
+	}
+	payload, err := store.Get(key)
+	switch {
+	case errors.Is(err, chunk.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "no such shard")
+		return
+	case errors.Is(err, chunk.ErrCorrupt):
+		writeErr(w, http.StatusUnprocessableEntity, "shard corrupt")
+		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	n := int64(len(payload))
+	if first >= n {
+		w.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(n, 10))
+		writeErr(w, http.StatusRequestedRangeNotSatisfiable, "range past the payload")
+		return
+	}
+	end := min(last+1, n)
+	table := chunk.BlockSums(payload)
+	body := make([]byte, 0, len(table)*len(meta.Hash{})+int(end-first))
+	for i := range table {
+		body = append(body, table[i][:]...)
+	}
+	body = append(body, payload[first:end]...)
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.o.BodyTimeout)) // I-97
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", first, end-1, n))
+	w.Header().Set(HeaderBlockTable, strconv.Itoa(len(table)*len(meta.Hash{})))
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusPartialContent)
+	_, _ = io.Copy(w, bytes.NewReader(body))
+}
+
+// parseRange reads one "bytes=first-last" range, both ends given.
+func parseRange(h string) (first, last int64, ok bool) {
+	spec, found := strings.CutPrefix(h, "bytes=")
+	if !found {
+		return 0, 0, false
+	}
+	a, b, found := strings.Cut(spec, "-")
+	if !found {
+		return 0, 0, false
+	}
+	first, err1 := strconv.ParseInt(a, 10, 64)
+	last, err2 := strconv.ParseInt(b, 10, 64)
+	if err1 != nil || err2 != nil || first < 0 || last < first {
+		return 0, 0, false
+	}
+	return first, last, true
+}
+
 // diskShards serves /v1/disks/{id}/shards/{key}, the shard endpoint of a disk: the only
 // shard route, since a device stores nothing (docs/14 §4, §9).
 func (s *Server) diskShards(w http.ResponseWriter, r *http.Request) {
@@ -513,6 +574,10 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 			return
 		}
 		defer release()
+		if r.Header.Get("Range") != "" {
+			s.serveSlice(w, r, store, key)
+			return
+		}
 		rc, size, err := store.Open(key)
 		switch {
 		case errors.Is(err, chunk.ErrNotFound):

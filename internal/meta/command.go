@@ -24,7 +24,7 @@ const (
 	OpTrash         Op = 15 // {Parent, Name, Recursive, Now}: the entry into the trash (codec 4)
 	OpRestore       Op = 16 // {Ino, NewParent (0 = original), NewName ("" = original), Now} (codec 4)
 	OpPurge         Op = 17 // {Ino (0 = every root due), Before, Limit, Now} (codec 4)
-	OpSetShardSums  Op = 18 // {Hash, Sums}: the data shards' hashes of a chunk committed without them (docs/04 §4, codec 5)
+	OpSetShardSums  Op = 18 // {Hash, Sums, SumsKind}: the data shards' hashes of a chunk committed without them, or its block roots (docs/04 §4, §5, codec 5, 18)
 	// Snapshots on mirror disks (docs/16, codec 7).
 	OpSnapshotBegin  Op = 19 // {Mirror, Name, Auto, Now} → Result.SnapID: a sync begins and holds GC
 	OpSnapshotEnd    Op = 20 // {ID, OK, Root, Files, Bytes, NewBytes, Missing, Now}
@@ -81,6 +81,12 @@ const (
 	// commandVersionV17: Playback (docs/13 §10c, I-406); an older binary does not know
 	// the op.
 	commandVersionV17 = 17
+	// commandVersionV18: a Commit whose NewChunks, or a SetShardSums, carry block roots
+	// (SumsKind, docs/04 §5, I-422); an older binary would misparse the kind byte.
+	commandVersionV18 = 18
+	// CodecBlockRoots is the codec every live member must read before the flusher or the
+	// backfill records block roots (docs/02 §Codec versions).
+	CodecBlockRoots = commandVersionV18
 	// CodecPlayback is the codec every live member must read before the web gateway
 	// proposes a playback report (docs/02 §Codec versions).
 	CodecPlayback = commandVersionV17
@@ -115,7 +121,7 @@ const (
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 17
+	CodecVersion = 18
 )
 
 // SetAttr mask bits.
@@ -330,15 +336,17 @@ type ChunkDesc struct {
 	Size      uint32
 	K, M      uint8
 	Placement []NodeIdx
-	Sums      []Hash // the data shards' SHA-256s, len K, or none (codec 5, I-201)
+	Sums      []Hash // the data shards' sums, len K, or none (codec 5, I-201)
+	SumsKind  uint8  // what Sums are: SumsShard or SumsBlocks (codec 18, I-422)
 }
 
 // SetShardSums records the data-shard hashes of a chunk committed without them (the
 // leader's backfill, docs/06 §4): the chunk must exist, len(Sums) must be its K, and
 // sums already recorded must be equal (ErrConflict otherwise).
 type SetShardSums struct {
-	Hash Hash
-	Sums []Hash
+	Hash     Hash
+	Sums     []Hash
+	SumsKind uint8 // SumsShard or SumsBlocks: roots replace whole-shard sums, never the reverse (codec 18, I-422)
 }
 
 // GCVictim is a chunk removed by GCDelete whose shards the leader must now delete.
@@ -462,6 +470,26 @@ func needsV16(c Command) bool { return c.Op == OpCommit && c.Commit != nil && c.
 // needsV17 reports whether c is a playback report (docs/13 §10c, I-406).
 func needsV17(c Command) bool { return c.Op == OpPlayback }
 
+// needsV18 reports whether c carries block roots: a SetShardSums or a Commit whose
+// NewChunks record sums of kind SumsBlocks (docs/04 §5, I-422).
+func needsV18(c Command) bool {
+	switch c.Op {
+	case OpSetShardSums:
+		return c.SetShardSums != nil && c.SetShardSums.SumsKind != SumsShard
+	case OpCommit:
+		if c.Commit == nil {
+			return false
+		}
+		for i := range c.Commit.NewChunks {
+			if d := &c.Commit.NewChunks[i]; len(d.Sums) > 0 && d.SumsKind != SumsShard {
+				return true
+			}
+		}
+	default:
+	}
+	return false
+}
+
 // needsV15 reports whether c is a snapshot heal (docs/16 §5): an older binary cannot
 // decode the op, so the leader refuses it while such a member is live (I-391).
 func needsV15(c Command) bool { return c.Op == OpSnapshotHeal }
@@ -562,6 +590,8 @@ func baseCodec(c Command) uint8 {
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
+	case needsV18(c):
+		return commandVersionV18
 	case needsV17(c):
 		return commandVersionV17
 	case needsV16(c):
@@ -608,8 +638,9 @@ func encodeCommand(c Command) []byte {
 
 // encodeBody writes the version byte, the op and the payload in version v.
 func encodeBody(w *writer, c Command, v uint8) {
-	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4 || v == commandVersionV6 || v == commandVersionV10, v == commandVersionV5 || v == commandVersionV9 || v == commandVersionV16
-	v9 := v == commandVersionV9 || v == commandVersionV16
+	v18 := v == commandVersionV18
+	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4 || v == commandVersionV6 || v == commandVersionV10, v == commandVersionV5 || v == commandVersionV9 || v == commandVersionV16 || v18
+	v9 := v == commandVersionV9 || v == commandVersionV16 || v18
 	v2 := v == commandVersionV2 || v == commandVersionV7 // a mirror row carries its Host as a disk row does
 	w.u8(v)
 	w.u8(uint8(c.Op))
@@ -707,13 +738,16 @@ func encodeBody(w *writer, c Command, v uint8) {
 			if v5 {
 				w.hashes(d.Sums)
 			}
+			if v18 {
+				w.u8(d.SumsKind)
+			}
 		}
 		w.i64(p.Now)
 		if v9 {
 			w.u64(p.Rewrite)
 			w.bool(p.RewriteStart)
 		}
-		if v == commandVersionV16 {
+		if v == commandVersionV16 || v18 {
 			a := p.Attrs
 			if a.Mask&^commitAttrMask != 0 {
 				panic(fmt.Sprintf("commit attributes mask %#x", a.Mask))
@@ -729,6 +763,9 @@ func encodeBody(w *writer, c Command, v uint8) {
 		p := mustPayload(c.SetShardSums, c.Op)
 		w.hash(p.Hash)
 		w.hashes(p.Sums)
+		if v18 {
+			w.u8(p.SumsKind)
+		}
 	case OpSetPlacement:
 		p := mustPayload(c.SetPlacement, c.Op)
 		w.hash(p.Hash)
@@ -853,7 +890,7 @@ func DecodeCommand(b []byte) (Command, error) {
 		c.System = r.bool()
 		v = r.u8()
 	}
-	if r.err == nil && (v < commandVersion || v > commandVersionV17 || v == 12 || v == 13 || (v == commandVersionV14 && !wrapped)) { // 12 is sealed S3's, never written yet; 13 was the withdrawn mesh
+	if r.err == nil && (v < commandVersion || v > commandVersionV18 || v == 12 || v == 13 || (v == commandVersionV14 && !wrapped)) { // 12 is sealed S3's, never written yet; 13 was the withdrawn mesh
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -892,6 +929,8 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = c.Op == OpCommit
 	case commandVersionV17:
 		legal = c.Op == OpPlayback
+	case commandVersionV18:
+		legal = c.Op == OpCommit || c.Op == OpSetShardSums
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums &&
 			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete && c.Op != OpSnapshotImport &&
@@ -962,27 +1001,42 @@ func DecodeCommand(b []byte) (Command, error) {
 			p.NewChunks = make([]ChunkDesc, n)
 			for i := range p.NewChunks {
 				p.NewChunks[i] = ChunkDesc{Hash: r.hash(), Size: r.u32(), K: r.u8(), M: r.u8(), Placement: r.nodeIdxs()}
-				if v == commandVersionV5 || v == commandVersionV9 || v == commandVersionV16 {
+				if v == commandVersionV5 || v == commandVersionV9 || v == commandVersionV16 || v == commandVersionV18 {
 					p.NewChunks[i].Sums = r.hashes()
+				}
+				if v == commandVersionV18 {
+					p.NewChunks[i].SumsKind = r.u8()
+					if r.err == nil && (p.NewChunks[i].SumsKind > SumsBlocks || (p.NewChunks[i].SumsKind != SumsShard && len(p.NewChunks[i].Sums) == 0)) {
+						return c, fmt.Errorf("meta: Commit in command version 18 with sums kind %d", p.NewChunks[i].SumsKind)
+					}
 				}
 			}
 		}
 		p.Now = r.i64()
-		if v == commandVersionV9 || v == commandVersionV16 {
+		if v == commandVersionV9 || v == commandVersionV16 || v == commandVersionV18 {
 			p.Rewrite, p.RewriteStart = r.u64(), r.bool()
 			if r.err == nil && v == commandVersionV9 && p.Rewrite == 0 && !p.RewriteStart {
 				return c, fmt.Errorf("meta: Commit in command version 9 without a rewrite") // canonical bytes (I-22)
 			}
 		}
-		if v == commandVersionV16 {
+		if v == commandVersionV16 || v == commandVersionV18 {
 			p.Attrs = CommitAttrs{Mask: r.u8(), Mode: r.u32(), Uid: r.u32(), Gid: r.u32(), Atime: r.i64(), Mtime: r.i64()}
-			if r.err == nil && (p.Attrs.Mask == 0 || p.Attrs.Mask&^commitAttrMask != 0) {
-				return c, fmt.Errorf("meta: Commit in command version 16 with attribute mask %#x", p.Attrs.Mask) // canonical bytes (I-22)
+			if r.err == nil && ((p.Attrs.Mask == 0 && v == commandVersionV16) || p.Attrs.Mask&^commitAttrMask != 0) {
+				return c, fmt.Errorf("meta: Commit in command version %d with attribute mask %#x", v, p.Attrs.Mask) // canonical bytes (I-22)
 			}
+		}
+		if r.err == nil && v == commandVersionV18 && !needsV18(Command{Op: OpCommit, Commit: p}) {
+			return c, fmt.Errorf("meta: Commit in command version 18 without block roots") // canonical bytes (I-22)
 		}
 		c.Commit = p
 	case OpSetShardSums:
 		c.SetShardSums = &SetShardSums{Hash: r.hash(), Sums: r.hashes()}
+		if v == commandVersionV18 {
+			c.SetShardSums.SumsKind = r.u8()
+			if r.err == nil && c.SetShardSums.SumsKind != SumsBlocks {
+				return c, fmt.Errorf("meta: SetShardSums in command version 18 with sums kind %d", c.SetShardSums.SumsKind) // canonical bytes (I-22)
+			}
+		}
 	case OpSetPlacement:
 		p := &SetPlacement{Hash: r.hash(), Placement: r.nodeIdxs()}
 		if v == commandVersionV3 {

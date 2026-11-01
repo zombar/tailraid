@@ -581,6 +581,13 @@ slot away from home on a non-voter until the gate moves it, I-295),
   and the 400 with its offset (I-411, I-412), and the suggestions for a prefix match the
   table (I-413). The report charts the proposals per minute the playback cost and lists
   the query table with each gateway's answer time.
+  36 range reads (docs/04 §5, `rangephase.go`, run after 17): a four-chunk file written
+  through one gateway, its last chunk partial; through another, cold, 4 KiB of its tail
+  and then 4 KiB of its second chunk, each served by a range fetch (`reads_ranged` up by
+  one each, `readahead_fetched` unchanged, the bytes exact, I-424); the second chunk read
+  again: served whole (`reads_ranged` unchanged) and then cached, so a third read moves
+  nothing; on a rig with one gateway the client's own cache served the reads and the
+  phase records the checks skipped; the report lists the four reads' times.
   **Users first** (`make soak SOAK_FLAGS=-users-first`, `Run.UsersFirst`): a real volume
   has its first admin from `init`, so a run can put phase 0 before phase 1: the admin
   made as phase 28 makes them, the driver's mount uid and SMB account bound to them on

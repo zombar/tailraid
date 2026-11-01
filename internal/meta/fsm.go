@@ -928,10 +928,11 @@ func (a *applier) commit(c *Commit) error {
 			}
 			switch {
 			case len(d.Sums) == 0:
-			case len(d.Sums) != int(cur.K):
+			case len(d.Sums) != int(cur.K) || d.SumsKind > SumsBlocks:
 				return ErrBadCommand
-			case cur.Sums == nil:
-				fill = append(fill, d)
+			case cur.Sums == nil || (cur.SumsKind == SumsShard && d.SumsKind == SumsBlocks):
+				fill = append(fill, d) // missing, or whole-shard sums giving way to roots (I-422)
+			case cur.SumsKind != d.SumsKind: // roots stay over whole-shard sums
 			case !slices.Equal(cur.Sums, d.Sums):
 				return ErrConflict // a pure function of the bytes: a difference is a bug caught here
 			}
@@ -940,7 +941,7 @@ func (a *applier) commit(c *Commit) error {
 		if d.Size == 0 || uint64(d.Size) > cs || !ValidPlacement(d.K, d.M, d.Placement) || a.onMirror(d.Placement) {
 			return ErrBadCommand
 		}
-		if len(d.Sums) != 0 && len(d.Sums) != int(d.K) {
+		if (len(d.Sums) != 0 && len(d.Sums) != int(d.K)) || d.SumsKind > SumsBlocks || (d.SumsKind != SumsShard && len(d.Sums) == 0) {
 			return ErrBadCommand
 		}
 		fresh = append(fresh, newEntry{d})
@@ -1001,12 +1002,13 @@ func (a *applier) commit(c *Commit) error {
 		d := e.d
 		ch := &Chunk{Hash: d.Hash, Size: d.Size, K: d.K, M: d.M, Placement: append([]NodeIdx(nil), d.Placement...)}
 		if len(d.Sums) > 0 {
-			ch.Sums = append([]Hash(nil), d.Sums...)
+			ch.Sums, ch.SumsKind = append([]Hash(nil), d.Sums...), d.SumsKind
 		}
 		st.Chunks[d.Hash] = ch
 	}
 	for _, d := range fill {
-		st.mutChunk(d.Hash).Sums = append([]Hash(nil), d.Sums...)
+		mc := st.mutChunk(d.Hash)
+		mc.Sums, mc.SumsKind = append([]Hash(nil), d.Sums...), d.SumsKind
 	}
 	// Only the indices that change carry a delta: written ones (old entry out, new in),
 	// and the entries a truncate drops; everything below keep that was not written is
@@ -1111,7 +1113,7 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 	}
 	ch = a.st.mutChunk(c.Hash)
 	if ch.K != c.K || ch.M != c.M {
-		ch.Sums = nil // the shards are different bytes now; the backfill records the new sums (I-201)
+		ch.Sums, ch.SumsKind = nil, SumsShard // the shards are different bytes now; the backfill records the new sums (I-201)
 	}
 	ch.K, ch.M = c.K, c.M
 	ch.Placement = append([]NodeIdx(nil), c.Placement...)
@@ -1123,8 +1125,9 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 }
 
 // setShardSums records a chunk's data-shard hashes (docs/04 §4, I-201): the backfill's
-// command for a chunk committed without them. Refs, placement and the tombstone are
-// untouched, so GC and repair see nothing change.
+// command for a chunk committed without them, or with whole-shard sums where block roots
+// are wanted (docs/04 §5, I-422). Refs, placement and the tombstone are untouched, so GC
+// and repair see nothing change.
 func (a *applier) setShardSums(c *SetShardSums) error {
 	if c == nil {
 		return ErrBadCommand
@@ -1133,16 +1136,20 @@ func (a *applier) setShardSums(c *SetShardSums) error {
 	if !ok {
 		return ErrUnknownChunk
 	}
-	if len(c.Sums) != int(ch.K) {
+	if len(c.Sums) != int(ch.K) || c.SumsKind > SumsBlocks {
 		return ErrBadCommand
 	}
-	if ch.Sums != nil {
-		if slices.Equal(ch.Sums, c.Sums) {
-			return nil
-		}
+	switch {
+	case ch.Sums == nil || (ch.SumsKind == SumsShard && c.SumsKind == SumsBlocks):
+	case ch.SumsKind != c.SumsKind:
+		return nil // roots stay over whole-shard sums
+	case slices.Equal(ch.Sums, c.Sums):
+		return nil
+	default:
 		return ErrConflict
 	}
-	a.st.mutChunk(c.Hash).Sums = append([]Hash(nil), c.Sums...)
+	mc := a.st.mutChunk(c.Hash)
+	mc.Sums, mc.SumsKind = append([]Hash(nil), c.Sums...), c.SumsKind
 	return nil
 }
 

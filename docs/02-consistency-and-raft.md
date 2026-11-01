@@ -69,7 +69,7 @@ const (
     OpTrash                   // {Parent, Name, Recursive bool, Now}: the entry into the trash (codec 4); in codec 8 it is an own cleanup (Own, I-220); codec 9 adds {Expect Ino} (I-225)
     OpRestore                 // {Ino, NewParent (0 = original), NewName ("" = original), Now} (codec 4)
     OpPurge                   // {Ino (0 = every root due), Before int64, Limit uint32, Now} (codec 4)
-    OpSetShardSums            // {Hash, Sums [][32]byte}: the data shards' hashes of a chunk committed without them (04 §4, codec 5)
+    OpSetShardSums            // {Hash, Sums [][32]byte, SumsKind u8 (codec 18)}: the data shards' hashes of a chunk committed without them, or its block roots (04 §4, §5, codec 5, 18)
     OpSnapshotBegin           // {Mirror NodeIdx, Name, Auto bool, Now} → Result.SnapID (16 §3, codec 7)
     OpSnapshotEnd             // {ID, OK bool, Root Hash, Files, Bytes, NewBytes uint64, Missing uint32, Now} (codec 7)
     OpSnapshotDelete          // {ID, Done bool, Now}: the mirror host's thinning only, never a user (codec 7)
@@ -401,7 +401,7 @@ disk or host), 3 (`SetPlacement.Expect`, `GCDelete.Limit`), 4 (`Trash`, `Restore
 `SetShardSums`), 6 (`SetAttr` with the library bits of 18 §9) or 7 (`SnapshotBegin`,
 `SnapshotEnd`, `SnapshotDelete`, `SnapshotImport`, `NodeUpsert` of a mirror, 16) or 8 (`Trash` with `Own`,
 an own cleanup, I-220; the version is the flag, no field is added) or 9 (`Commit` with
-`Rewrite`/`RewriteStart`, `Trash` with `Expect`, `Rename` with `NoReplace`; I-223..I-226), snapshots in version 9
+`Rewrite`/`RewriteStart`, `Trash` with `Expect`, `Rename` with `NoReplace`; I-223..I-226) or 18 (`Commit` whose `NewChunks` and `SetShardSums` carry `SumsKind`, the block roots of 04 §5, I-422; snapshots in version 17 carry `Chunk.SumsKind`), snapshots in version 9
 (01 §Binary codec: `Inode.RewriteAt`; codec 8 added no state); every reader
 decodes every older version. A `Commit` carries `Sums` only while every live active member
 reads codec 5 (the flusher asks the prober's `MinCodec`), so a flush never fails on the
@@ -465,7 +465,8 @@ rows by inode; frame 15 and older restore with none.
 **`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
 hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are
 equal and refuses different ones (`ErrConflict`: two leaders cannot disagree about a pure
-function of the bytes, so a difference is a bug caught here); refs, placement and
+function of the bytes, so a difference is a bug caught here); block roots (`SumsKind`,
+04 §5, I-422) replace whole-shard sums and whole-shard sums never replace roots; refs, placement and
 tombstones are untouched, so the command never changes what GC or repair see.
 
 **Idempotency.** Raft may re-deliver entries on restore; `Apply` is pure with respect to the

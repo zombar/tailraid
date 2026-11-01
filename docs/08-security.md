@@ -58,7 +58,7 @@ Endpoints and who may call them:
 | Endpoint | Caller | Note |
 |---|---|---|
 | `GET /health` | anyone on the tailnet | unauthenticated, no secrets in the body; it names the node's web port (`web`, 0 when off) so a dashboard can link a member's own pages (docs/13 §1) |
-| `GET/HEAD/PUT/DELETE /v1/disks/{id}/shards/{key}` | members | `DELETE` additionally needs `X-Tailraid-Log-Index` and passes the fence of `docs/06` or gets `412`; `X-Tailraid-Priority: background` (the repairer's requests) holds at most half the node's slots (06 §4, I-175); a background `PUT` sends `Expect: 100-continue` and a node without room for it answers `507` before the body (I-420) |
+| `GET/HEAD/PUT/DELETE /v1/disks/{id}/shards/{key}` | members | `DELETE` additionally needs `X-Tailraid-Log-Index` and passes the fence of `docs/06` or gets `412`; `X-Tailraid-Priority: background` (the repairer's requests) holds at most half the node's slots (06 §4, I-175); a background `PUT` sends `Expect: 100-continue` and a node without room for it answers `507` before the body (I-420); a `GET` with a `Range` answers `206` with the shard's block table and the bytes named, from a shard verified whole (04 §5, I-423) |
 | `POST /v1/apply`, `POST /v1/members`, `POST /v1/bad-slot` | members | `update_addr` per step 6 |
 | `POST /v1/join` | any tailnet identity with the token | step 2 skipped, step 3 against the claimed StableID |
 | `GET /v1/status` | members | |

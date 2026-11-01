@@ -48,6 +48,10 @@ type Fabric struct {
 	Stores  map[meta.NodeIdx]*chunk.Store
 	Cache   *chunk.Cache
 	Ov      *vfs.Overlay
+	// Ranges makes GetRange serve slices (docs/04 §5, I-423); off, every node answers
+	// ErrNoRange as an S3 node does, so a reader fetches chunks whole and the tests of
+	// the chunk fetch (early serve, readahead, hedging, abandonment) keep their timing.
+	Ranges  bool
 	staging string
 
 	mu             sync.Mutex
@@ -65,12 +69,15 @@ type Fabric struct {
 	stallPeak      int                        // the most at once since the fabric was built
 	putCount       int
 	gets           map[meta.NodeIdx]int
-	proposeErr     error // returned once by Propose as a transport failure
-	proposeDown    error // returned by every Propose while set
-	proposeUnknown int   // Propose applies the command and then reports an unknown outcome, this many times
-	refusedSums    int   // Commits carrying Sums refused with ErrCodec, as by a leader seeing an older member
-	leaderCodec    uint8 // when set, Propose refuses a command of a newer codec with ErrCodec (I-156)
-	stale          bool  // the gateway's health view given to vfs.FS
+	rangeGets      map[meta.NodeIdx]int // range GETs per node (docs/04 §5, I-424)
+	rangeBytes     int64                // payload bytes every range GET returned
+	cs             uint32               // the volume's chunk size
+	proposeErr     error                // returned once by Propose as a transport failure
+	proposeDown    error                // returned by every Propose while set
+	proposeUnknown int                  // Propose applies the command and then reports an unknown outcome, this many times
+	refusedSums    int                  // Commits carrying Sums refused with ErrCodec, as by a leader seeing an older member
+	leaderCodec    uint8                // when set, Propose refuses a command of a newer codec with ErrCodec (I-156)
+	stale          bool                 // the gateway's health view given to vfs.FS
 	proposed       []meta.Op
 	forestall      map[meta.Op]func() // run once before the next proposal of the op applies
 }
@@ -82,13 +89,21 @@ const (
 // NewFabric builds a fabric with the given node count and (k,m) policy.
 func NewFabric(t TB, nodes int, k, m uint8) *Fabric {
 	t.Helper()
+	return NewFabricChunk(t, nodes, k, m, ChunkSize)
+}
+
+// NewFabricChunk is NewFabric with a chunk size of cs: a range fetch moves 64 KiB blocks
+// (chunk.BlockSize), so a test of it needs shards of several blocks (docs/04 §5).
+func NewFabricChunk(t TB, nodes int, k, m uint8, cs uint32) *Fabric {
+	t.Helper()
 	f := &Fabric{
 		TB: t, FSM: meta.NewFSM(), Clk: clock.NewFake(time.Unix(1_700_000_000, 0)), SelfIdx: 1,
 		Stores: map[meta.NodeIdx]*chunk.Store{}, down: map[meta.NodeIdx]bool{}, full: map[meta.NodeIdx]bool{},
 		targetOf: map[meta.NodeIdx]meta.NodeIdx{}, hostOf: map[meta.NodeIdx]meta.NodeIdx{},
-		failPutOnce: map[meta.NodeIdx]int{}, gets: map[meta.NodeIdx]int{},
+		failPutOnce: map[meta.NodeIdx]int{}, gets: map[meta.NodeIdx]int{}, rangeGets: map[meta.NodeIdx]int{},
+		cs: cs,
 	}
-	f.Apply(meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{ChunkSize: ChunkSize, K: k, M: m, Now: 1}})
+	f.Apply(meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{ChunkSize: cs, K: k, M: m, Now: 1}})
 	root := t.TempDir()
 	// the hosts take indices 1..nodes, as tests address them; their disks follow
 	hosts := make([]meta.NodeIdx, 0, nodes)
@@ -105,7 +120,7 @@ func NewFabric(t TB, nodes int, k, m uint8) *Fabric {
 	}
 	t.Cleanup(f.Cache.Drain) // a write still in flight while the temp directory goes fails the cleanup
 	f.staging = filepath.Join(root, "staging")
-	f.Ov, err = vfs.OpenOverlay(f.staging, ChunkSize, f.Clk)
+	f.Ov, err = vfs.OpenOverlay(f.staging, cs, f.Clk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +139,7 @@ func (f *Fabric) RestartOverlay(opts ...vfs.Option) {
 	if err := f.Ov.Close(); err != nil {
 		f.TB.Fatal(err)
 	}
-	ov, err := vfs.OpenOverlay(f.staging, ChunkSize, f.Clk, opts...)
+	ov, err := vfs.OpenOverlay(f.staging, f.cs, f.Clk, opts...)
 	if err != nil {
 		f.TB.Fatal(err)
 	}
@@ -397,6 +412,50 @@ func (f *Fabric) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 	return st.Get(key)
 }
 
+// GetRange is the range GET of docs/04 §5 over the node's store: the block table and the
+// payload from off, at most n bytes; counted apart from whole GETs so a test can tell a
+// range fetch from a chunk fetch (I-424). A down node is unreachable as for Get.
+func (f *Fabric) GetRange(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, off, n int64) (chunk.Slice, error) {
+	if !f.Ranges {
+		return chunk.Slice{}, chunk.ErrNoRange
+	}
+	f.mu.Lock()
+	node = f.hostLocked(node)
+	f.rangeGets[node]++
+	st, ok := f.Stores[node]
+	down := f.down[node]
+	f.mu.Unlock()
+	if !ok || down {
+		return chunk.Slice{}, errNodeDown
+	}
+	payload, err := st.Get(key)
+	if err != nil {
+		return chunk.Slice{}, err
+	}
+	if off < 0 || off >= int64(len(payload)) || n <= 0 {
+		return chunk.Slice{}, fmt.Errorf("range [%d, +%d) outside a %d-byte shard", off, n, len(payload))
+	}
+	end := min(off+n, int64(len(payload)))
+	f.mu.Lock()
+	f.rangeBytes += end - off
+	f.mu.Unlock()
+	return chunk.Slice{Table: chunk.BlockSums(payload), Off: off, Data: payload[off:end]}, nil
+}
+
+// RangeGets returns the number of range GETs issued to node so far, RangeBytes the
+// payload bytes every range GET returned.
+func (f *Fabric) RangeGets(node meta.NodeIdx) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rangeGets[f.hostLocked(node)]
+}
+
+func (f *Fabric) RangeBytes() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rangeBytes
+}
+
 // StallGet makes every GET from node block until release is called; entered closes when
 // the first one is waiting. release waits for the stalled GETs to finish.
 func (f *Fabric) StallGet(node meta.NodeIdx) (entered <-chan struct{}, release func()) {
@@ -530,7 +589,7 @@ func (f *Fabric) Flusher(opts ...func(*vfs.Config)) *vfs.Flusher {
 // tailraid writing the same volume (docs/04 §6).
 func (f *Fabric) OtherGateway() (*vfs.FS, *vfs.Flusher) {
 	f.TB.Helper()
-	ov, err := vfs.OpenOverlay(filepath.Join(f.TB.TempDir(), "staging"), ChunkSize, f.Clk)
+	ov, err := vfs.OpenOverlay(filepath.Join(f.TB.TempDir(), "staging"), f.cs, f.Clk)
 	if err != nil {
 		f.TB.Fatalf("other gateway's overlay: %v", err)
 	}

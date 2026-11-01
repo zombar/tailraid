@@ -13,7 +13,7 @@ func TestCodec_StateRoundTrip(t *testing.T) {
 	if err := EncodeState(&buf, s); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(buf.Bytes(), []byte("TRM1\x10")) {
+	if !bytes.HasPrefix(buf.Bytes(), []byte("TRM1\x11")) {
 		t.Fatalf("bad header %x", buf.Bytes()[:5])
 	}
 	got, err := DecodeState(bytes.NewReader(buf.Bytes()))
@@ -160,6 +160,9 @@ func FuzzDecodeState(f *testing.F) {
 func withoutRewrites(s *State) *State {
 	for _, in := range s.Inodes {
 		in.RewriteAt = 0
+	}
+	for _, c := range s.Chunks {
+		c.SumsKind = SumsShard // version 17 carries the kind (I-422); a snapshot before 9 lacks both
 	}
 	return s
 }
