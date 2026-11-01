@@ -2,6 +2,12 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.11.2 (2026-11-01)
+
+### Changes
+
+- repair: the home batch follows repair.workers (I-295) ([870a78a](https://github.com/zombar/tailraid/commit/870a78a))
+
 ## v0.11.1 (2026-10-31)
 
 ### Changes
