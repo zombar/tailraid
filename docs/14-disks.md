@@ -243,10 +243,12 @@ Away slots are of two kinds, and keep the urgency each had before the fold:
     and queues their chunks; when they reach `repair.home_start` (default 5 %) of the
     stored bytes, the gate opens, and it stays open until a sweep finds none left or the
     home candidate set changes (the gate then re-evaluates against the new homes);
-  - while open, each pass moves the placement-only slots of at most `HomeBatch` (64)
-    chunks from the queue, and none when the pass before found a bad slot or a pending
-    migration, at background priority and under `repair.rate` and `repair.workers`
-    (06 §4); a pass that finds the queue empty sweeps again;
+  - while open, each pass moves the placement-only slots of at most `HomeBatch` chunks
+    from the queue: `HomePerWorker` (16) for each of `repair.workers` (64 at the default
+    4, 1024 at 64), so the fan-out an operator raises for a refill also hurries a
+    rebalance; and none when the pass before found a bad slot or a pending migration, at
+    background priority and under `repair.rate` and `repair.workers` (06 §4); a pass that
+    finds the queue empty sweeps again;
   - `repair.home_start: 0` closes it for good; `tailraid volume rebalance` opens it once
     whatever the threshold, until the movable bytes reach 0 (`--dry-run` lists the bytes
     each target would send and receive and moves nothing);
@@ -398,9 +400,9 @@ as `<host>/m<n>`.
 - **I-295** — Placement-only moves run only while the gate is open: it opens when the
   movable placement-only bytes reach `repair.home_start` of the stored bytes (or once by
   `volume rebalance`), closes when a pass finds none movable, and re-evaluates when the
-  home candidate set changes; an open pass moves at most `HomeBatch` chunks, none when
-  the pass before found a bad slot or a pending migration, at background priority and
-  under `repair.rate`; `repair.home_start: 0` never opens it on its own, and `volume
+  home candidate set changes; an open pass moves at most `HomeBatch` chunks
+  (`HomePerWorker` 16 for each of `repair.workers`), none when the pass before found a
+  bad slot or a pending migration, at background priority and under `repair.rate`; `repair.home_start: 0` never opens it on its own, and `volume
   rebalance --dry-run` moves nothing.
 - **I-296** — Every slot the repairer refills (missing, on a dead, draining or removed
   target, reported, absent, or cap-breaking) goes to its home target when that target is
@@ -437,6 +439,6 @@ as `<host>/m<n>`.
 | I-147 | `TestSvc_RefreshUnit_NamesNewDiskAndRestarts` |
 | I-172 | `TestHomeMoves_Table`, `TestRepair_Home_AddDiskFillsWithinHost` |
 | I-294 | `TestHome_EqualsWritePlacement`, `TestHome_NNodeDeterminism`, `TestHomeMoves_Idempotent`, `TestHomeMoves_Table`, `TestCluster_DegradedWrite_DataSlotsComeHome` |
-| I-295 | `TestRepair_Home_Gate_Table`, `TestRepair_Home_AddDiskFillsWithinHost`, `TestCluster_DegradedWrite_DataSlotsComeHome`, `TestCLI_VolumeRebalance_DryRun`, `TestConfig_HomeStart` |
+| I-295 | `TestRepair_Home_Gate_Table`, `TestRepair_Home_AddDiskFillsWithinHost`, `TestCluster_DegradedWrite_DataSlotsComeHome`, `TestCLI_VolumeRebalance_DryRun`, `TestConfig_HomeStart`, `TestRepair_HomePerPass_FollowsWorkers` |
 | I-311 | `TestPlanSlots_HomeMoveNeverNamesATargetTwice`, `TestRepair_Home_FailedMovesShutTheGate` |
 | I-296 | `TestChunkState_DomainSkew`, `TestFillHome_RefillsFromHome`, `TestRepair_RefillGoesHome_Table`, `TestRepair_DomainSkew_HomeDeadFillsUnderCap` |
