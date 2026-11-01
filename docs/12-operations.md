@@ -421,7 +421,8 @@ wait on full targets: …` and both `status` and `check` warn `N degraded chunks
 full target (…)` in place of the generic under-replicated line (I-421): the way out is
 room on that target, a disk added, or its budget raised. `repair.workers` (1..64,
 default 4) and `repair.rate` (a size a second, `0` for no limit, default 50M) in the config
-set the fan-out and the byte rate, and `repair.scrub_period` (a duration of 1h to 8760h,
+set the fan-out and the byte rate (the workers also size the home batch, 16 chunks a
+worker a pass, 14 §7), and `repair.scrub_period` (a duration of 1h to 8760h,
 `0` for no background scrub, default 168h, a week) how long the background scrub takes to verify the
 whole volume once (06 §5, I-215), and `repair.home_start` (a percentage of 0 to 100,
 default 5, `0` for never on its own) the share of the stored bytes that must be movable

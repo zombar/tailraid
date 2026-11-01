@@ -58,10 +58,11 @@ type Config struct {
 	// Home placement (docs/14 §7, I-295): slots away from their home for placement only
 	// move while the gate is open. It opens at the end of a pass whose movable bytes
 	// reach HomeStart (a fraction) of the stored bytes, or by OpenHome, and closes when a
-	// pass finds none movable; an open pass moves at most HomeBatch chunks. HomeStart 0
-	// never opens it on its own.
+	// pass finds none movable; an open pass moves at most HomePerPass chunks: HomeBatch
+	// when set, else HomePerWorker for each of Workers, so raising the fan-out for a
+	// refill hurries a rebalance too. HomeStart 0 never opens it on its own.
 	HomeStart float64
-	HomeBatch int
+	HomeBatch int // 0: HomePerWorker × Workers
 	// Workers is how many chunks a pass repairs at once (docs/06 §4, I-174): each chunk's
 	// steps stay in sequence, chunks overlap; at most MaxWorkers, below 1 means 1.
 	Workers int
@@ -94,6 +95,19 @@ const HomeHold = 30 * time.Minute
 // (docs/14 §7).
 const FullHold = 10 * time.Minute
 
+// HomePerWorker is how many home moves a pass makes for each of Config.Workers while the
+// gate is open and Config.HomeBatch is 0 (docs/14 §7, I-295): 64 at the default fan-out.
+const HomePerWorker = 16
+
+// HomePerPass is the home moves one pass makes while the gate is open: HomeBatch when
+// set, else HomePerWorker for each worker (a fan-out below 1 counts as 1).
+func (c Config) HomePerPass() int {
+	if c.HomeBatch > 0 {
+		return c.HomeBatch
+	}
+	return HomePerWorker * max(c.Workers, 1)
+}
+
 // MaxWorkers bounds Config.Workers (`repair.workers`).
 const MaxWorkers = 64
 
@@ -105,7 +119,7 @@ func DefaultConfig() Config {
 	return Config{
 		FillAfter: 10 * time.Minute, ScrubPeriod: DefaultScrubPeriod, S3ScrubBytes: 1 << 30, RateBytes: 50 << 20, Grace: 10 * time.Minute,
 		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute, Retention: DefaultRetention,
-		HomeStart: DefaultHomeStart, HomeBatch: 64, Workers: 4, SumsBatch: 256, SweepInterval: DefaultSweepInterval,
+		HomeStart: DefaultHomeStart, Workers: 4, SumsBatch: 256, SweepInterval: DefaultSweepInterval,
 	}
 }
 
@@ -649,7 +663,7 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	}
 	homeBatch := 0
 	if r.homeOpen && r.homeIdle {
-		homeBatch = r.cfg.HomeBatch
+		homeBatch = r.cfg.HomePerPass()
 	}
 	r.mu.Unlock()
 	r.homeLeft.Store(int64(homeBatch))

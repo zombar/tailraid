@@ -310,3 +310,26 @@ func TestRepair_SlowHostNotADestination(t *testing.T) {
 		})
 	}
 }
+
+// Invariant: I-295
+func TestRepair_HomePerPass_FollowsWorkers(t *testing.T) {
+	cases := []struct {
+		name          string
+		workers, home int
+		want          int
+	}{
+		{"default", 4, 0, 64},
+		{"one worker", 1, 0, repair.HomePerWorker},
+		{"sixteen", 16, 0, 256},
+		{"the most", repair.MaxWorkers, 0, repair.HomePerWorker * repair.MaxWorkers},
+		{"below one is one", 0, 0, repair.HomePerWorker},
+		{"an explicit batch wins", 16, 3, 3},
+	}
+	for _, c := range cases {
+		cfg := repair.DefaultConfig()
+		cfg.Workers, cfg.HomeBatch = c.workers, c.home
+		if got := cfg.HomePerPass(); got != c.want {
+			t.Errorf("%s: workers %d home %d: HomePerPass %d, want %d", c.name, c.workers, c.home, got, c.want)
+		}
+	}
+}
