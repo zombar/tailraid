@@ -862,7 +862,7 @@ func printHomePlan(w io.Writer, p repair.HomePlan, dry bool) {
 		fmt.Fprintf(w, "        %s → %s  %d slots, %s\n", nodeName(f.FromName, f.From), nodeName(f.ToName, f.To), f.Slots, bytesStr(uint64(max(f.Bytes, 0))))
 	}
 	if stuck := p.AwaySlots - p.MovableSlots; stuck > 0 {
-		fmt.Fprintf(w, "        %d away slots wait for a home that is offline or full\n", stuck)
+		fmt.Fprintf(w, "        %d away slots wait for a home that is offline or full, or for a slot of the chunk that does\n", stuck)
 	}
 	switch {
 	case dry:

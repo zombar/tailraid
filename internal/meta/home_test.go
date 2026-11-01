@@ -7,8 +7,8 @@ import (
 	"github.com/zombar/tailraid/internal/testseed"
 )
 
-// applyHome is what the repairer does with Movable: every away slot is emptied, FillHome
-// fills what it can, and the rest keep their holder.
+// applyHome is what the repairer does with Movable: every away slot is emptied and
+// FillAway moves what it can home in one step, the rest keeping their holder.
 func applyHome(v *HomeView, c Chunk, dest func(NodeIdx) bool) []NodeIdx {
 	k := int(c.K)
 	home := v.Home(c.Hash, k, int(c.M))
@@ -17,12 +17,7 @@ func applyHome(v *HomeView, c Chunk, dest func(NodeIdx) bool) []NodeIdx {
 	for _, i := range away {
 		place[i] = 0
 	}
-	v.FillHome(place, k, home, func(n NodeIdx) bool { return !v.s3[n] && dest(n) })
-	for _, i := range away {
-		if place[i] == 0 {
-			place[i] = c.Placement[i]
-		}
-	}
+	v.FillAway(place, c.Placement, away, k, home, func(n NodeIdx) bool { return !v.s3[n] && dest(n) })
 	return place
 }
 
@@ -223,5 +218,89 @@ func TestFillHome_RefillsFromHome(t *testing.T) {
 	place[1] = 0
 	if got := v.FillHome(place, 3, home, func(n NodeIdx) bool { return n != home[1] }); got != nil || place[1] != 0 {
 		t.Fatalf("filled %v to %v with its home dead", got, place)
+	}
+}
+
+// bigAndLaptop is one host of six disks (2..7) and a laptop of one (9): a 3+2 home puts
+// four slots on the big host, above ceil(5/2), through the second walk of Place.
+// hashN(i) is the first hash from i whose home has slots 0 and 4 on the big host (the
+// laptop, picked by the first walk, is parity slot 3).
+func bigAndLaptop(t *testing.T) (*HomeView, Hash, []NodeIdx) {
+	t.Helper()
+	v := NewHomeView(topology([]int{6, 1}, []bool{true, false}, 0))
+	for i := range uint64(10000) {
+		h := hashN(i + 1)
+		home := v.Home(h, 3, 2)
+		if home[0] != 9 && home[4] != 9 && slices.Contains(home, 9) {
+			return v, h, home
+		}
+	}
+	t.Fatal("no hash with slots 0 and 4 on the big host")
+	return nil, Hash{}, nil
+}
+
+// spareOf is a big-host disk that is not in home.
+func spareOf(home []NodeIdx) NodeIdx {
+	for n := NodeIdx(2); n <= 7; n++ {
+		if !slices.Contains(home, n) {
+			return n
+		}
+	}
+	return 0
+}
+
+// The move that completes a home above ceil((k+m)/D) is within the cap: the cap of a
+// move toward home is the home's own count for each host (docs/14 §7).
+// Invariant: I-294, I-296
+func TestFillHome_HomeAboveCap(t *testing.T) {
+	v, h, home := bigAndLaptop(t)
+	spare := spareOf(home)
+	place := slices.Clone(home)
+	place[0] = 0
+	if got := v.FillHome(place, 3, home, allLive); !slices.Equal(got, []int{0}) || !slices.Equal(place, home) {
+		t.Fatalf("filled %v to %v, want home %v", got, place, home)
+	}
+	c := Chunk{Hash: h, K: 3, M: 2, Refs: 1, Placement: slices.Clone(home)}
+	c.Placement[0] = spare
+	if got := v.Movable(c, allLive); !slices.Equal(got, []int{0}) {
+		t.Fatalf("movable %v, want [0] (home %v, placement %v)", got, home, c.Placement)
+	}
+	if got := applyHome(v, c, allLive); !slices.Equal(got, home) {
+		t.Fatalf("moved to %v, want home %v", got, home)
+	}
+}
+
+// Every away slot of a chunk moves in one step: a slot on the home target of another
+// away slot moves when that slot moves too, and waits when that slot cannot move, since
+// a target never holds two slots of a chunk (I-9).
+// Invariant: I-294
+func TestHomeMoves_StayingSlotHoldsItsTarget(t *testing.T) {
+	v, h, home := bigAndLaptop(t)
+	x, y, spare := home[0], home[4], spareOf(home)
+	not := func(n NodeIdx) func(NodeIdx) bool { return func(m NodeIdx) bool { return m != n } }
+	set := func(p []NodeIdx, i int, n NodeIdx) []NodeIdx { p = slices.Clone(p); p[i] = n; return p }
+	onY := set(set(home, 0, y), 4, spare) // slot 0 sits on slot 4's home, slot 4 on a spare
+	swapped := set(set(home, 0, y), 4, x) // the two slots hold each other's home
+	for _, tc := range []struct {
+		name  string
+		place []NodeIdx
+		dest  func(NodeIdx) bool
+		moves []SlotMove
+		want  []NodeIdx
+	}{
+		{"both move in one step", onY, allLive, []SlotMove{{0, y, x}, {4, spare, y}}, home},
+		{"slot 0 cannot move: slot 4 waits for its target", onY, not(x), nil, onY},
+		{"a swap moves both", swapped, allLive, []SlotMove{{0, y, x}, {4, x, y}}, home},
+		{"a swap with one side dead moves neither", swapped, not(y), nil, swapped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Chunk{Hash: h, K: 3, M: 2, Refs: 1, Placement: tc.place}
+			if got := v.Moves(c, tc.dest); !slices.Equal(got, tc.moves) {
+				t.Fatalf("moves %v, want %v (home %v)", got, tc.moves, home)
+			}
+			if got := applyHome(v, c, tc.dest); !slices.Equal(got, tc.want) {
+				t.Fatalf("moved to %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
