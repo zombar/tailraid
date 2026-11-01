@@ -1294,23 +1294,19 @@ func planSlots(c meta.Chunk, bad []meta.SlotIssue, kept []meta.NodeIdx, migrate 
 		}
 	}
 	fill()
-	away := map[int]bool{}
+	var away []int
 	for _, i := range standIn {
 		newPlace[i] = 0
 	}
 	for _, b := range bad {
 		if b.Reason == meta.ReasonAway {
-			away[b.Idx] = true
+			away = append(away, b.Idx)
 		}
 	}
 	if len(away) > 0 {
-		// an away slot goes home or nowhere, and never onto a bucket (I-294, L-220)
-		hv.FillHome(newPlace, int(k), home, func(n meta.NodeIdx) bool { return !hv.S3(n) && dest(n) })
-		for i := range away {
-			if newPlace[i] == 0 {
-				newPlace[i] = c.Placement[i]
-			}
-		}
+		// every away slot goes home or nowhere in one step, never onto a bucket, and a
+		// slot bound for the holder of one that stays waits with it (I-294, L-220)
+		hv.FillAway(newPlace, c.Placement, away, int(k), home, func(n meta.NodeIdx) bool { return !hv.S3(n) && dest(n) })
 	}
 	fill()
 	// A slot whose shard is still served (live draining holder) keeps its node until a

@@ -103,3 +103,74 @@ func TestPlanSlots_HomeMoveNeverNamesATargetTwice(t *testing.T) {
 		t.Fatalf("only %d chunks had away slots: the test proves little", tried)
 	}
 }
+
+// The plan of a home move is what the sweep counted: every away slot Moves lists goes to
+// the target Moves names and every other away slot keeps its holder, so a chunk counted
+// movable is one the pass moves (docs/14 §7).
+// Invariant: I-294, I-311
+func TestPlanSlots_AgreesWithHomeMoves(t *testing.T) {
+	rng := testseed.Seed(t)
+	tried, moved := 0, 0
+	for iter := range 20000 {
+		nodes := randomTopology(rng)
+		var targets []meta.NodeIdx
+		for _, n := range nodes {
+			if n.Kind.Target() {
+				targets = append(targets, n.Idx)
+			}
+		}
+		k := uint8(2 + rng.Intn(2))
+		m := uint8(1 + rng.Intn(2))
+		if int(k)+int(m) > len(targets) {
+			continue
+		}
+		h := meta.Hash(sha256.Sum256(fmt.Appendf(nil, "%d", rng.Int63())))
+		place := make([]meta.NodeIdx, int(k)+int(m))
+		for i, j := range rng.Perm(len(targets))[:len(place)] {
+			place[i] = targets[j]
+		}
+		c := meta.Chunk{Hash: h, K: k, M: m, Refs: 1, Placement: place}
+		hv := meta.NewHomeView(nodes)
+		away := hv.Away(place, int(k), hv.Home(h, int(k), int(m)))
+		if len(away) == 0 {
+			continue
+		}
+		tried++
+		refused := map[meta.NodeIdx]bool{}
+		for _, n := range targets {
+			refused[n] = rng.Intn(3) == 0
+		}
+		dest := func(n meta.NodeIdx) bool { return !refused[n] }
+		live := map[meta.NodeIdx]bool{}
+		for _, n := range nodes {
+			live[n.Idx] = true
+		}
+		issues := make([]meta.SlotIssue, 0, len(away))
+		kept := append([]meta.NodeIdx(nil), place...)
+		for _, i := range away {
+			issues = append(issues, meta.SlotIssue{Idx: i, Reason: meta.ReasonAway, Readable: true})
+			kept[i] = 0
+		}
+		moves := hv.Moves(c, dest)
+		plan := planSlots(c, issues, kept, false, k, m, hv, nodes, live, dest)
+		to := map[int]meta.NodeIdx{}
+		for _, mv := range moves {
+			to[mv.Slot] = mv.To
+		}
+		if len(moves) > 0 {
+			moved++
+		}
+		for _, i := range away {
+			want, ok := to[i]
+			if !ok {
+				want = place[i]
+			}
+			if plan.place[i] != want || plan.unchanged[i] == ok {
+				t.Fatalf("iteration %d: slot %d planned %v (unchanged %v) from %v, moves %v (plan %v)", iter, i, plan.place[i], plan.unchanged[i], place, moves, plan.place)
+			}
+		}
+	}
+	if tried < 1000 || moved < 100 {
+		t.Fatalf("only %d chunks with away slots, %d with moves", tried, moved)
+	}
+}

@@ -207,12 +207,17 @@ domain skew of earlier releases (the host cap) and the capacity rebalance within
 A slot is **away** when its target is not in its home for its class: a data slot (index
 < k) when its target is not one of the home's data targets, a parity slot when its target
 is not one of the home's parity targets. An away slot is **movable** when a home target of
-its class holds no slot of the chunk and is live, not suspect and has room for the shard;
-it then moves there, keeping its index (shard `i` stays shard `i`). Every away slot of a
-chunk moves in one `SetPlacement`, so a home target that held a slot of the other class is
-freed and taken in the same step, and the host cap is checked against the placement the
-step commits, never against a half-moved one: a chunk is home after one move once its
-targets are live. Slots on an S3 node are never moved and an S3 node is never the
+its class holds no slot of the chunk that stays and is live, not suspect and has room for
+the shard; it then moves there, keeping its index (shard `i` stays shard `i`). Every away
+slot of a chunk moves in one `SetPlacement`, so a home target that held another away slot
+is freed and taken in the same step; a home target that holds an away slot which cannot
+move (its own home dead, full or held) stays taken, and the slot bound for it waits with
+it, since a target never holds two slots of a chunk (I-9). The host cap of a move toward
+home is the home's own count for each host, or `ceil((k+m)/D)` where that is more: where a
+host has too few targets the second walk of `Place` gives another host more, and reaching
+that home is not a cap break (one host of six disks and a laptop of one home four of five
+slots on the big host, and the fourth moved there is home, not skew). A chunk is home after
+one move once its targets are live. Slots on an S3 node are never moved and an S3 node is never the
 destination of a move (egress, and only the leader's daily sweep deletes in a bucket,
 I-138), though S3 rows count in the home as they do for writes. A chunk whose `(k,m)`
 differs from the volume's is not judged (the migration re-places every slot, and lands it
@@ -393,8 +398,10 @@ as `<host>/m<n>`.
 - **I-294** — `Home(h, nodes, k, m)` is a pure function of the hash and the Active
   membership (targets, hosts, voter bits, capacities), the same on every node, and equal to
   the placement a write gets when every Active target is live; `HomeMoves` sends an away
-  slot only to a home target of its class that holds no slot of the chunk and is live, not
-  suspect and has room, keeps the slot's index, never moves a slot on or onto an S3 node,
+  slot only to a home target of its class that holds no slot of the chunk that stays
+  (every away slot of a chunk moves in one step, and a slot bound for the holder of an
+  away slot that cannot move waits with it) and is live, not suspect and has room, within
+  the home's own count for each host, keeps the slot's index, never moves a slot on or onto an S3 node,
   and returns nothing for a chunk whose slots are home, so a second pass after convergence
   moves nothing and liveness alone never changes a home.
 - **I-295** — Placement-only moves run only while the gate is open: it opens when the
@@ -438,7 +445,7 @@ as `<host>/m<n>`.
 | I-146 | `TestDiskSet_UnwritableDiskClosed` |
 | I-147 | `TestSvc_RefreshUnit_NamesNewDiskAndRestarts` |
 | I-172 | `TestHomeMoves_Table`, `TestRepair_Home_AddDiskFillsWithinHost` |
-| I-294 | `TestHome_EqualsWritePlacement`, `TestHome_NNodeDeterminism`, `TestHomeMoves_Idempotent`, `TestHomeMoves_Table`, `TestCluster_DegradedWrite_DataSlotsComeHome` |
+| I-294 | `TestHome_EqualsWritePlacement`, `TestHome_NNodeDeterminism`, `TestHomeMoves_Idempotent`, `TestHomeMoves_Table`, `TestHomeMoves_StayingSlotHoldsItsTarget`, `TestFillHome_HomeAboveCap`, `TestPlanSlots_AgreesWithHomeMoves`, `TestCluster_DegradedWrite_DataSlotsComeHome` |
 | I-295 | `TestRepair_Home_Gate_Table`, `TestRepair_Home_AddDiskFillsWithinHost`, `TestCluster_DegradedWrite_DataSlotsComeHome`, `TestCLI_VolumeRebalance_DryRun`, `TestConfig_HomeStart`, `TestRepair_HomePerPass_FollowsWorkers` |
-| I-311 | `TestPlanSlots_HomeMoveNeverNamesATargetTwice`, `TestRepair_Home_FailedMovesShutTheGate` |
-| I-296 | `TestChunkState_DomainSkew`, `TestFillHome_RefillsFromHome`, `TestRepair_RefillGoesHome_Table`, `TestRepair_DomainSkew_HomeDeadFillsUnderCap` |
+| I-311 | `TestPlanSlots_HomeMoveNeverNamesATargetTwice`, `TestPlanSlots_AgreesWithHomeMoves`, `TestRepair_Home_FailedMovesShutTheGate` |
+| I-296 | `TestChunkState_DomainSkew`, `TestFillHome_RefillsFromHome`, `TestFillHome_HomeAboveCap`, `TestRepair_RefillGoesHome_Table`, `TestRepair_DomainSkew_HomeDeadFillsUnderCap` |
